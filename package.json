@@ -1,0 +1,39 @@
+{
+  "name": "colonize",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Colonize — multi-tenant Community & Residential Society Management SaaS platform (MongoDB database-per-society, Node/Express API, React+Vite web apps, Expo SDK 54 mobile apps).",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=20.11.0",
+    "npm": ">=10.0.0"
+  },
+  "workspaces": [
+    "packages/*",
+    "backend",
+    "apps/*"
+  ],
+  "scripts": {
+    "setup": "npm install",
+    "dev": "concurrently -n api,admin,super -c cyan,magenta,yellow \"npm:dev:api\" \"npm:dev:admin\" \"npm:dev:super\"",
+    "dev:api": "npm run dev -w backend",
+    "dev:admin": "npm run dev -w @colonize/admin-web",
+    "dev:super": "npm run dev -w @colonize/super-admin-web",
+    "dev:resident": "npm run start -w @colonize/resident-mobile",
+    "dev:security": "npm run start -w @colonize/security-mobile",
+    "build": "npm run build -w @colonize/shared && npm run build -w backend && npm run build -w @colonize/admin-web && npm run build -w @colonize/super-admin-web",
+    "test": "npm run test -w backend",
+    "test:unit": "npm run test:unit -w backend",
+    "test:integration": "npm run test:integration -w backend",
+    "test:e2e": "npm run test:e2e -w backend",
+    "seed": "npm run seed -w backend",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "docker:up": "docker compose -f docker/docker-compose.yml up -d --build",
+    "docker:down": "docker compose -f docker/docker-compose.yml down"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "typescript": "~5.9.2"
+  }
+}

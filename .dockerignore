@@ -1,0 +1,49 @@
+# Build context hygiene for docker/Dockerfile (context = repository root).
+# Keeps the image build fast and, more importantly, keeps secrets and local
+# state out of the layers.
+
+# ---- dependencies & build output (rebuilt inside the image) ----
+**/node_modules
+**/dist
+**/build
+**/*.tsbuildinfo
+
+# ---- local runtime state: the embedded dev database, uploads, logs ----
+**/.runtime
+**/.data
+**/.tmp
+**/storage/local
+**/*.log
+**/logs
+
+# ---- secrets: never copy a real env file into an image layer ----
+.env
+.env.local
+.env.*.local
+**/*.pem
+**/*.key
+**/secrets
+
+# ---- tests, coverage, tooling caches ----
+**/coverage
+**/.nyc_output
+**/.cache
+**/.turbo
+**/.vite
+**/.eslintcache
+
+# ---- VCS / editor / OS ----
+.git
+.gitignore
+.github
+.idea
+.vscode
+.DS_Store
+Thumbs.db
+
+# ---- docs & repo metadata (not needed at runtime) ----
+README.md
+LICENSE
+
+# NOTE: docker/ is deliberately *not* ignored — BuildKit reads the Dockerfile
+# from the build context, so excluding it would break the build.

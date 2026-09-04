@@ -1,0 +1,62 @@
+# ---- dependencies ----
+node_modules/
+.pnp
+.pnp.js
+jspm_packages/
+
+# ---- build output ----
+dist/
+build/
+out/
+.expo/
+.expo-shared/
+web-build/
+*.tsbuildinfo
+
+# ---- runtime data (embedded dev database, uploads, logs) ----
+.data/
+.tmp/
+storage/local/
+backend/.runtime/
+*.log
+logs/
+
+# ---- env & secrets (never commit) ----
+.env
+.env.local
+.env.*.local
+!.env.example
+!.env.development
+!.env.production
+*.pem
+*.key
+secrets/
+
+# ---- coverage / test artifacts ----
+coverage/
+.nyc_output/
+
+# ---- caches ----
+.cache/
+.turbo/
+.vite/
+.eslintcache
+.stylelintcache
+
+# ---- os / editor ----
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# ---- mobile ----
+*.jks
+*.p8
+*.p12
+*.mobileprovision
+android/app/build/
+ios/Pods/
+
+# temporary partial-include typecheck harness (not for commit)
+apps/admin-web/tsconfig.probe.json
