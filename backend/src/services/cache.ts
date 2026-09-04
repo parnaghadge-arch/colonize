@@ -106,8 +106,13 @@ export const reportCache = new TtlCache(15_000, 1_000);
 
 /** Invalidate everything derived from a society (used after settings/role changes). */
 export function invalidateSociety(societyId: string): void {
-  societyCache.invalidatePrefix(`soc:${societyId}`);
-  societyCache.invalidatePrefix(`slug:`);
+  // These prefixes must match the keys the readers actually write, or the invalidation silently
+  // does nothing: `loadSocietyById` caches under `soc:id:<id>` and `loadSocietyBySlug` under
+  // `soc:slug:<slug>`, so `soc:<id>` and `slug:` matched neither. The society document was therefore
+  // never dropped from cache, and a suspension took up to the full 60s TTL to take effect even
+  // though `authenticate` checks `status` on every request.
+  societyCache.invalidatePrefix(`soc:id:${societyId}`);
+  societyCache.invalidatePrefix('soc:slug:');
   permissionCache.invalidatePrefix(`perm:${societyId}`);
   settingsCache.invalidatePrefix(`set:${societyId}`);
   reportCache.invalidatePrefix(`rep:${societyId}`);

@@ -7,21 +7,24 @@ import {
   complaintStatusChangeSchema,
   createComplaintSchema,
   createServiceRequestSchema,
+  createStaffSchema,
   createWorkOrderSchema,
   updateComplaintSchema,
+  updateStaffSchema,
   updateWorkOrderSchema,
   workOrderProgressSchema,
-  idSchema,
+  passwordSchema,
 } from '@colonize/shared/validation';
 import type { ModuleKey } from '@colonize/shared';
 import { buildCrudRouter } from '../_shared/crud.js';
 import { authenticate, requireTenantContext } from '../../middleware/authenticate.js';
-import { requirePermission } from '../../middleware/permissions.js';
+import { requireModule, requirePermission } from '../../middleware/permissions.js';
 import { asyncHandler } from '../../middleware/errors.js';
 import { validate } from '../../middleware/validate.js';
 import { ok, created } from '../../utils/response.js';
 import { ApiError } from '../../utils/errors.js';
 import { serialise } from '../../utils/serialize.js';
+import { AuditService } from '../../services/audit.js';
 import { newId } from '../../db/ids.js';
 import type { Document } from '../../db/drivers/types.js';
 import { nextReference } from '../../services/counters.js';
@@ -355,9 +358,19 @@ const workOrdersCrud = buildCrudRouter<z.infer<typeof createWorkOrderSchema>, z.
   sortableFields: ['createdAt', 'priority', 'status', 'scheduledStart', 'actualCost', 'referenceNumber'],
   defaultSort: 'createdAt',
   defaultSortDir: 'desc',
-  prepareCreate: (ctx, body) => ({
+  /**
+   * A work order raised by assigning a complaint gets its reference from `createWorkOrder` in the
+   * service. One raised directly arrives here instead, so it must take a number from the same
+   * atomic counter — otherwise directly-created jobs have no `WO-…` reference at all and the
+   * vendor cannot quote one on a phone call.
+   */
+  prepareCreate: async (ctx, body) => ({
     ...body,
-    referenceNumber: undefined,
+    referenceNumber: await nextReference({ db: ctx.db!, societyId: ctx.society!.id, kind: 'WORK_ORDER' }),
+    // The create schema deliberately has no `status`: a caller cannot open a job already marked
+    // completed. Every new work order starts here.
+    status: 'CREATED',
+    progressPercent: 0,
     history: [{ at: new Date(), status: 'CREATED', actorId: ctx.principal.userId, actorName: ctx.principal.fullName, note: 'Created manually' }],
     createdBy: ctx.principal.userId,
     updatedBy: ctx.principal.userId,
@@ -521,40 +534,84 @@ vendorsRouter.post(
 
 /* ---------------------------------- staff ----------------------------------- */
 
-const staffSchema = z.object({
-  fullName: z.string().trim().min(2).max(80),
-  phone: z.string().trim().min(7).max(20),
-  email: z.string().trim().email().max(160).optional(),
-  staffType: z.string().trim().min(2).max(40),
-  role: z.string().trim().max(60).optional(),
-  department: z.string().trim().max(60).optional(),
-  employmentType: z.enum(['FULL_TIME', 'PART_TIME', 'CONTRACT', 'HOURLY', 'AGENCY']).default('FULL_TIME'),
-  salary: z.coerce.number().min(0).max(10_000_000).optional(),
-  joiningDate: z.string().trim().max(30).optional(),
-  address: z.record(z.string(), z.unknown()).optional(),
-  idProofType: z.string().trim().max(30).optional(),
-  idProofNumber: z.string().trim().max(40).optional(),
-  photoUrl: z.string().trim().max(500).optional(),
-  assignedBuildings: z.array(idSchema).max(50).default([]),
-  assignedGates: z.array(idSchema).max(20).default([]),
-  allowsUnitEntry: z.coerce.boolean().default(false),
-  status: z.enum(['ACTIVE', 'ON_LEAVE', 'RESIGNED', 'TERMINATED', 'SUSPENDED']).default('ACTIVE'),
-});
-
-export const staffRouter = buildCrudRouter<z.infer<typeof staffSchema>, z.infer<typeof staffSchema>>({
+/**
+ * Staff uses the shared schema rather than a local one: the seed data, the attendance module and
+ * the mobile apps all read `type` / `monthlySalary` / `shift` / `gateId`, so validating against
+ * anything else here would let the API write a second, incompatible shape into the same
+ * collection.
+ */
+export const staffRouter = buildCrudRouter<z.infer<typeof createStaffSchema>, z.infer<typeof updateStaffSchema>>({
   collection: 'staff',
   unitScoped: false, // society-wide: no unitId column on this collection
   permission: 'staff',
   moduleKey: 'staffAttendance' as ModuleKey,
   label: 'Staff member',
-  createSchema: staffSchema,
-  updateSchema: staffSchema.partial(),
-  searchFields: ['fullName', 'phone', 'email', 'staffType', 'department'],
-  filterFields: ['staffType', 'department', 'employmentType', 'status', 'isActive'],
-  sortableFields: ['fullName', 'staffType', 'joiningDate', 'createdAt'],
+  createSchema: createStaffSchema,
+  updateSchema: updateStaffSchema,
+  searchFields: ['fullName', 'phone', 'email', 'type', 'shift'],
+  filterFields: ['type', 'shift', 'employmentType', 'workType', 'status', 'gateId', 'allowLogin'],
+  sortableFields: ['fullName', 'type', 'joiningDate', 'monthlySalary', 'createdAt'],
   defaultSort: 'fullName',
   serialise: { revealContact: true, omit: ['idProofNumber'] },
-  prepareCreate: (ctx, body) => ({ ...body, isActive: true, createdBy: ctx.principal.userId, updatedBy: ctx.principal.userId }),
+  prepareCreate: (ctx, body) => ({ ...body, createdBy: ctx.principal.userId, updatedBy: ctx.principal.userId }),
 });
+
+/**
+ * Issuing a staff login is a privileged, security-relevant act, so it gets its own routes rather
+ * than riding along on the generic CRUD update: the role is derived server-side from the staff
+ * record, and a generated password is returned exactly once.
+ */
+const staffLoginSchema = z.object({
+  password: passwordSchema.optional(),
+  role: z.enum(helpdeskService.STAFF_ROLES).optional(),
+  mustChangePassword: z.coerce.boolean().default(true),
+});
+
+const staffLoginGuards: RequestHandler[] = [
+  authenticate({ clientScopes: ['console'] }),
+  requireModule('staffAttendance' as ModuleKey) as never,
+  requirePermission('staff:create', 'staff:update', 'staff:manage'),
+];
+
+staffRouter.post(
+  '/:id/login',
+  ...staffLoginGuards,
+  validate(staffLoginSchema),
+  asyncHandler(async (req, res) => {
+    const body = req.body as z.infer<typeof staffLoginSchema>;
+    const result = await helpdeskService.provisionStaffLogin(ctxFrom(req), String(req.params.id), body);
+    await new AuditService(requireTenantContext(req)).log({
+      action: 'STAFF_LOGIN_ISSUED',
+      module: 'staff',
+      recordId: result.staffId,
+      recordType: 'staff',
+      newValue: { userId: result.userId, role: result.role },
+      severity: 'NOTICE',
+    });
+    return ok(
+      res,
+      result,
+      result.temporaryPassword
+        ? 'Login issued — share the temporary password once, it will not be shown again'
+        : 'Login issued',
+    );
+  }),
+);
+
+staffRouter.delete(
+  '/:id/login',
+  ...staffLoginGuards,
+  asyncHandler(async (req, res) => {
+    const result = await helpdeskService.revokeStaffLogin(ctxFrom(req), String(req.params.id));
+    await new AuditService(requireTenantContext(req)).log({
+      action: 'STAFF_LOGIN_REVOKED',
+      module: 'staff',
+      recordId: result.staffId,
+      recordType: 'staff',
+      severity: 'NOTICE',
+    });
+    return ok(res, result, result.revoked ? 'Login revoked' : 'This staff member had no login to revoke');
+  }),
+);
 
 export { newId };

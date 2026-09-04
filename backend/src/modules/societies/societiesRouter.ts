@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { DEFAULT_TIER_MODULES, permission, type ModuleKey } from '@colonize/shared';
+import { DEFAULT_TIER_MODULES, PLAN_TIERS, permission, type ModuleKey } from '@colonize/shared';
 import { authenticatePlatform, requirePlatformContext } from '../../middleware/authenticate.js';
 import { requirePermission } from '../../middleware/permissions.js';
 import { asyncHandler } from '../../middleware/errors.js';
@@ -28,7 +28,7 @@ import * as structureService from '../structure/structureService.js';
  * another's data even if they somehow obtained a platform token.
  */
 
-const createSocietySchema = z.object({
+export const createSocietySchema = z.object({
   name: z.string().trim().min(3).max(120),
   slug: z
     .string()
@@ -51,7 +51,10 @@ const createSocietySchema = z.object({
   websiteUrl: z.string().trim().max(300).optional(),
   logoUrl: z.string().trim().max(500).optional(),
   coverImageUrl: z.string().trim().max(500).optional(),
-  tier: z.enum(['FREE', 'STARTER', 'GROWTH', 'PRO', 'ENTERPRISE']).default('FREE'),
+  tier: // `PLAN_TIERS` is the catalogue the platform actually seeds. A hard-coded list here drifted
+  // to STARTER/GROWTH/PRO, which rejected three real plans with a 422 and accepted three
+  // nonexistent ones that then failed the plan lookup with a 500.
+  z.enum(PLAN_TIERS).default('FREE'),
   modules: z.array(z.string().min(2).max(40)).max(60).optional(),
   onboardingSource: z.string().trim().max(40).optional(),
   admin: z
@@ -64,14 +67,64 @@ const createSocietySchema = z.object({
     .optional(),
 });
 
-const onboardingSchema = z.object({
+/**
+ * Fields a platform operator may change on an existing society (§46).
+ *
+ * Written out rather than derived from `createSocietySchema.partial()`, because that derivation had
+ * three live bugs:
+ *
+ * 1. **Defaults were re-applied.** `country`, `timezone` and `currency` carry `.default()` on the
+ *    create schema. Under `.partial()` Zod still *applies* a default when the key is absent, and the
+ *    handler `$set`s the parsed output verbatim — so patching a Dubai society's address silently
+ *    reset it to `IN` / `Asia/Kolkata` / `INR`, shifting every bill due date, SLA clock and amenity
+ *    slot and mislabelling every amount's currency.
+ * 2. **Unknown keys were stripped, not rejected.** The schema was not `.strict()`, so a field the
+ *    create schema does not know (`notes`, `supportContact`, `isFeatured`) returned 200 having
+ *    changed nothing — which reads to an operator as "it worked". Those are real columns the control
+ *    plane displays, so they are editable here.
+ * 3. **`tier` and `modules` were writable but inert.** Entitlements are resolved from the tenant
+ *    `subscriptions` mirror (see `authenticate`), never from the society document, so setting `tier`
+ *    here changed only what this panel displayed while `planId`, limits and the mirror went stale.
+ *    Plan changes belong to `PUT /:id/subscription`, which resolves the plan and re-syncs the tenant.
+ */
+export const updateSocietySchema = z
+  .object({
+    name: z.string().trim().min(3).max(120),
+    slug: z.string().trim().min(3).max(48).regex(/^[a-z0-9-]+$/),
+    legalName: z.string().trim().max(160).nullable(),
+    registrationNumber: z.string().trim().max(60).nullable(),
+    city: z.string().trim().min(2).max(80),
+    state: z.string().trim().max(80).nullable(),
+    country: z.string().trim().max(60),
+    pincode: z.string().trim().max(12).nullable(),
+    address: z.string().trim().max(400).nullable(),
+    timezone: z.string().trim().max(60),
+    currency: z.string().trim().length(3),
+    contactEmail: z.string().trim().email().max(160).nullable(),
+    contactPhone: z.string().trim().max(20).nullable(),
+    supportContact: z.string().trim().max(160).nullable(),
+    websiteUrl: z.string().trim().max(300).nullable(),
+    logoUrl: z.string().trim().max(500).nullable(),
+    coverImageUrl: z.string().trim().max(500).nullable(),
+    gstin: z.string().trim().max(20).nullable(),
+    notes: z.string().trim().max(2000).nullable(),
+    isFeatured: z.coerce.boolean(),
+    onboardingSource: z.string().trim().max(40),
+  })
+  .partial()
+  .strict();
+
+export const onboardingSchema = z.object({
   step: z.enum(['PROFILE', 'STRUCTURE', 'ADMIN', 'SETTINGS', 'ACTIVATION']),
   payload: z.record(z.string(), z.unknown()).default({}),
   dryRun: z.coerce.boolean().default(false),
 });
 
-const subscriptionSchema = z.object({
-  tier: z.enum(['FREE', 'STARTER', 'GROWTH', 'PRO', 'ENTERPRISE']),
+export const subscriptionSchema = z.object({
+  tier: // `PLAN_TIERS` is the catalogue the platform actually seeds. A hard-coded list here drifted
+  // to STARTER/GROWTH/PRO, which rejected three real plans with a 422 and accepted three
+  // nonexistent ones that then failed the plan lookup with a 500.
+  z.enum(PLAN_TIERS),
   modules: z.array(z.string().min(2).max(40)).max(60).optional(),
   renewalMode: z.enum(['MONTHLY', 'QUARTERLY', 'ANNUAL']).default('MONTHLY'),
   startDate: z.string().trim().max(20).optional(),
@@ -188,7 +241,17 @@ router.post(
       {
         society: serialise(society, { revealContact: true }),
         admin: admin
-          ? { id: admin._id, fullName: admin.fullName, email: admin.email ?? null, phone: admin.phone ?? null, mustChangePassword: true }
+          ? {
+              id: admin._id,
+              fullName: admin.fullName,
+              email: admin.email ?? null,
+              phone: admin.phone ?? null,
+              // Report what was actually stored. This was hard-coded `true`, so an operator who had
+              // just set a temporary password was told the administrator still had none.
+              mustChangePassword: Boolean(admin.mustChangePassword),
+              status: admin.status ?? null,
+              isActive: Boolean(admin.isActive),
+            }
           : null,
       },
       `Society "${society.name}" created and its private database provisioned`,
@@ -230,17 +293,17 @@ router.get(
 router.patch(
   '/:id',
   requirePermission(permission('society', 'update'), permission('society', 'manage')),
-  validate(createSocietySchema.partial()),
+  validate(updateSocietySchema),
   asyncHandler(async (req, res) => {
     const ctx = requirePlatformContext(req);
     const id = String(req.params.id);
     const before = await ctx.platformDatabase.collection('societies').findOne({ _id: id });
     if (!before) throw ApiError.notFound('Society');
 
+    // `updateSocietySchema` is strict and carries no `admin`, `tier` or `modules` keys, so the
+    // parsed body is exactly the set of columns this route is allowed to write.
     const body = req.body as Record<string, unknown>;
     const update: Record<string, unknown> = { ...body, updatedBy: ctx.principal.userId };
-    delete update.admin;
-    if (Array.isArray(body.modules)) update.modules = body.modules as ModuleKey[];
 
     await ctx.platformDatabase.collection('societies').updateOne({ _id: id }, { $set: update });
     const after = await ctx.platformDatabase.collection('societies').findOne({ _id: id });
@@ -307,15 +370,15 @@ router.post(
   }),
 );
 
+export const setSocietyStatusSchema = z.object({
+  status: z.enum(['ONBOARDING', 'ACTIVE', 'SUSPENDED', 'INACTIVE', 'ARCHIVED']),
+  reason: z.string().trim().max(400).optional(),
+});
+
 router.post(
   '/:id/status',
   requirePermission(permission('society', 'manage')),
-  validate(
-    z.object({
-      status: z.enum(['ONBOARDING', 'ACTIVE', 'SUSPENDED', 'INACTIVE', 'ARCHIVED']),
-      reason: z.string().trim().max(400).optional(),
-    }),
-  ),
+  validate(setSocietyStatusSchema),
   asyncHandler(async (req, res) => {
     const ctx = requirePlatformContext(req);
     const body = req.body as { status: string; reason?: string };
@@ -526,7 +589,7 @@ router.get(
     const societyId = String(req.params.id);
     const db = await databases.tenantDb(societyId);
     const admins = await db.collection('users').find(
-      { societyId, roles: { $in: ['SOCIETY_ADMIN', 'MANAGING_COMMITTEE', 'CHAIRMAN', 'SECRETARY', 'TREASURER'] } },
+      { societyId, roles: { $in: societiesService.SOCIETY_ADMIN_ROLES } },
       { sort: { createdAt: 1 }, limit: 200 },
     );
     return ok(
@@ -548,18 +611,18 @@ router.get(
   }),
 );
 
+export const inviteSocietyAdminSchema = z.object({
+  fullName: z.string().trim().min(2).max(80),
+  email: z.string().trim().email().max(160).optional(),
+  phone: z.string().trim().max(20).optional(),
+  password: z.string().min(8).max(128).optional(),
+  roles: z.array(z.string().min(2).max(40)).min(1).max(5).default(['SOCIETY_ADMIN']),
+});
+
 router.post(
   '/:id/admins',
   requirePermission(permission('society', 'manage'), permission('user', 'create')),
-  validate(
-    z.object({
-      fullName: z.string().trim().min(2).max(80),
-      email: z.string().trim().email().max(160).optional(),
-      phone: z.string().trim().max(20).optional(),
-      password: z.string().min(8).max(128).optional(),
-      roles: z.array(z.string().min(2).max(40)).min(1).max(5).default(['SOCIETY_ADMIN']),
-    }),
-  ),
+  validate(inviteSocietyAdminSchema),
   asyncHandler(async (req, res) => {
     const ctx = requirePlatformContext(req);
     const societyId = String(req.params.id);
@@ -571,7 +634,7 @@ router.post(
     const db = await databases.tenantDb(societyId);
     const adminCount = await db.collection('users').countDocuments({
       societyId,
-      roles: { $in: ['SOCIETY_ADMIN', 'MANAGING_COMMITTEE', 'CHAIRMAN', 'SECRETARY', 'TREASURER'] },
+      roles: { $in: societiesService.SOCIETY_ADMIN_ROLES },
     });
     if (adminCount >= maxAdmins) {
       throw ApiError.badRequest(`The ${society.tier} plan allows ${maxAdmins} administrators. Upgrade the plan to add more.`);

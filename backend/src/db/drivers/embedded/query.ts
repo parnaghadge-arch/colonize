@@ -538,9 +538,12 @@ function groupKey(doc: Document, idSpec: unknown): unknown {
   if (idSpec === null) return null;
   if (typeof idSpec === 'string' && idSpec.startsWith('$')) return getPath(doc, idSpec.slice(1));
   if (idSpec && typeof idSpec === 'object' && !Array.isArray(idSpec)) {
+    // A compound `_id` must come back as the *object* Mongo would return, so callers can read
+    // `row._id.status`. Stringifying it here would silently flatten every compound group and
+    // leave downstream property reads undefined. Bucketing uses its own stable map key.
     const out: Document = {};
     for (const [k, v] of Object.entries(idSpec as Document)) out[k] = groupKey(doc, v);
-    return JSON.stringify(out, (_key, value) => (value instanceof Date ? { $date: value.toISOString() } : value));
+    return out;
   }
   return idSpec;
 }

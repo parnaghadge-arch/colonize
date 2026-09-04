@@ -1,0 +1,27 @@
+{
+  "name": "@colonize/admin-web",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Society Management Web App — the console a society's admin, committee and manager use (§78). React + Vite.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -p tsconfig.json --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@colonize/shared": "*",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-router-dom": "^7.18.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.2.0",
+    "typescript": "~5.9.2",
+    "vite": "^7.3.6"
+  }
+}

@@ -180,7 +180,7 @@ export async function createUnit(ctx: StructureContext, input: CreateUnitInput):
     floorId = floor ? String(floor._id) : null;
   }
 
-  const label = buildUnitLabel(building, wingId, unitNumber, floorNumber, ctx);
+  const label = await buildUnitLabel(building, wingId, unitNumber, floorNumber, ctx);
   const doc = await ctx.db.collection('units').create({
     _id: newId('units'),
     societyId: ctx.societyId,
@@ -216,6 +216,31 @@ export async function createUnit(ctx: StructureContext, input: CreateUnitInput):
   return doc;
 }
 
+/**
+ * Compose a unit's human-readable label: "A-1203, Wing A, Tower A — Alpha, Floor 12".
+ *
+ * Pure and exported so the repair script and the create path cannot drift apart.
+ */
+export function composeUnitLabel(parts: {
+  unitNumber: string;
+  wingCode?: string | null;
+  buildingName?: string | null;
+  buildingCode?: string | null;
+  floorNumber?: number | null;
+}): string {
+  const segments = [String(parts.unitNumber ?? '').trim()];
+  if (parts.wingCode) segments.push(`Wing ${parts.wingCode}`);
+  const building = parts.buildingName ?? parts.buildingCode;
+  if (building) segments.push(String(building));
+  // Distinguish "ground floor" (0, shown) from "floor unknown" (null/undefined, omitted).
+  // `Number(null)` is 0, so the null check has to come first.
+  const floor = parts.floorNumber;
+  if (floor !== null && floor !== undefined && Number.isFinite(Number(floor)) && Number(floor) >= 0) {
+    segments.push(`Floor ${Number(floor)}`);
+  }
+  return segments.filter(Boolean).join(', ');
+}
+
 async function buildUnitLabel(
   building: Document,
   wingId: string | null,
@@ -224,11 +249,13 @@ async function buildUnitLabel(
   ctx: StructureContext,
 ): Promise<string> {
   const wing = wingId ? await ctx.db.collection('wings').findOne({ societyId: ctx.societyId, _id: wingId }) : null;
-  const parts = [unitNumber];
-  if (wing) parts.push(`Wing ${wing.code}`);
-  parts.push(String(building.name ?? building.code));
-  if (Number.isFinite(floorNumber) && floorNumber >= 0) parts.push(`Floor ${floorNumber}`);
-  return parts.join(', ');
+  return composeUnitLabel({
+    unitNumber,
+    wingCode: wing ? String(wing.code ?? '') : null,
+    buildingName: building.name ? String(building.name) : null,
+    buildingCode: building.code ? String(building.code) : null,
+    floorNumber,
+  });
 }
 
 /** "A-1203" → 12, "B-302" → 3, "12" → 12. A sensible default when the client omits it. */

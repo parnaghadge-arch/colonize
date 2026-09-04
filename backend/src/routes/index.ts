@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import authRouter from '../modules/auth/authRouter.js';
 import societiesRouter from '../modules/societies/societiesRouter.js';
+import { societyRouter } from '../modules/society/societyRouter.js';
 import { structureRouter, buildingsRouter, wingsRouter, floorsRouter, unitsRouter } from '../modules/structure/structureRouter.js';
 import {
   residentsRouter,
@@ -197,6 +198,12 @@ apiRouter.use('/auth', authRouter);
 /* --------------------------- super-admin (platform) -------------------------- */
 
 apiRouter.use('/platform/societies', societiesRouter);
+
+/* ---------------------- society self-service (tenant side) ------------------- */
+
+// The same data seen from inside: a society's own administrators managing their profile,
+// configurable rules, module entitlements, roles and audit trail (§47, §48, §63, §79).
+apiRouter.use('/society', societyRouter);
 
 /* -------------------------------- structure --------------------------------- */
 

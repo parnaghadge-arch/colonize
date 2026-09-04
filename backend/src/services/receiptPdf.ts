@@ -1,4 +1,5 @@
 import PDFDocument from 'pdfkit';
+import { formatCurrency } from '@colonize/shared';
 import type { Document } from '../db/drivers/types.js';
 
 /**
@@ -80,14 +81,9 @@ const FONT = 'Helvetica';
 const FONT_BOLD = 'Helvetica-Bold';
 
 function money(value: number, currency = 'INR'): string {
-  const symbol = currency === 'INR' ? '\u20B9' : `${currency} `;
-  const amount = Number(value ?? 0);
-  // Indian digit grouping: 1,00,000 rather than 100,000.
-  const [whole, fraction] = Math.abs(amount).toFixed(2).split('.');
-  const last3 = whole.slice(-3);
-  const rest = whole.slice(0, -3);
-  const grouped = rest ? `${rest.replace(/\B(?=(\d{2})+(?!\d))/g, ',')},${last3}` : last3;
-  return `${amount < 0 ? '-' : ''}${symbol}${grouped}${fraction && fraction !== '00' ? `.${fraction}` : ''}`;
+  // Single implementation: shared/formatCurrency already does Indian digit grouping
+  // (1,00,000 not 100,000) and guards against NaN/Infinity.
+  return formatCurrency(value, currency);
 }
 
 function formatDate(value: Date | string | null | undefined): string {

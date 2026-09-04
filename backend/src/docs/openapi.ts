@@ -9,6 +9,16 @@
 import { z } from 'zod';
 import { env } from '../config/env.js';
 import * as V from '@colonize/shared/validation';
+// The platform routes define their own validators rather than reusing the tenant-facing ones in
+// @colonize/shared, so the document is derived from the schemas the router actually enforces.
+import {
+  createSocietySchema as platformCreateSocietySchema,
+  updateSocietySchema as platformUpdateSocietySchema,
+  subscriptionSchema as platformSubscriptionSchema,
+  onboardingSchema as platformOnboardingSchema,
+  inviteSocietyAdminSchema as platformInviteAdminSchema,
+  setSocietyStatusSchema as platformSetStatusSchema,
+} from '../modules/societies/societiesRouter.js';
 
 export type JsonSchema = Record<string, unknown>;
 type PathItem = Record<string, unknown>;
@@ -301,8 +311,21 @@ function entitySchemas(): Record<string, JsonSchema> {
     }, ['title']),
     WorkOrder: withAudit({ referenceNumber: str(), complaintId: { type: ['string', 'null'] }, status: str(), vendorId: { type: ['string', 'null'] } }),
     ServiceRequest: withAudit({ title: str(), category: str(), status: str(), unitId: { type: ['string', 'null'] } }),
-    Vendor: withAudit({ name: str(), category: str(), status: str() }, ['name']),
-    Staff: withAudit({ name: str(), role: str(), department: { type: ['string', 'null'] }, status: str() }, ['name']),
+    Vendor: withAudit({
+      businessName: str(), contactPersonName: { type: ['string', 'null'] }, phone: { type: ['string', 'null'] },
+      serviceCategories: { type: 'array', items: str() }, contractType: { type: ['string', 'null'] },
+      rating: { type: ['number', 'null'] }, totalWorkOrders: { type: ['integer', 'null'] },
+      completedWorkOrders: { type: ['integer', 'null'] }, allowPortalLogin: { type: ['boolean', 'null'] },
+      status: str(),
+    }, ['businessName']),
+    Staff: withAudit({
+      fullName: str(), phone: { type: ['string', 'null'] }, type: str(), shift: { type: ['string', 'null'] },
+      employmentType: { type: ['string', 'null'] }, workType: { type: ['string', 'null'] },
+      monthlySalary: { type: ['number', 'null'] }, joiningDate: ts, exitDate: ts,
+      gateId: { type: ['string', 'null'] }, userId: { type: ['string', 'null'], description: 'Set once a login has been issued' },
+      allowLogin: { type: ['boolean', 'null'] }, policeVerificationStatus: { type: ['string', 'null'] },
+      status: str(),
+    }, ['fullName']),
     Amenity: withAudit({ name: str(), kind: str(), capacity: { type: ['integer', 'null'] }, isFree: { type: ['boolean', 'null'] } }, ['name']),
     AmenityBooking: withAudit({
       referenceNumber: str(), amenityId: id, residentId: { type: ['string', 'null'] },
@@ -353,8 +376,12 @@ function validationSchemas(): Record<string, JsonSchema> {
     ['LoginPasswordInput', V.loginPasswordSchema],
     ['RefreshTokenInput', V.refreshTokenSchema],
     ['ChangePasswordInput', V.changePasswordSchema],
-    ['CreateSocietyInput', V.createSocietySchema],
-    ['UpdateSocietyInput', V.updateSocietySchema],
+    ['CreateSocietyInput', platformCreateSocietySchema],
+    ['UpdateSocietyInput', platformUpdateSocietySchema],
+    ['PlatformSubscriptionInput', platformSubscriptionSchema],
+    ['PlatformOnboardingInput', platformOnboardingSchema],
+    ['PlatformInviteAdminInput', platformInviteAdminSchema],
+    ['PlatformSetStatusInput', platformSetStatusSchema],
     ['CreateBuildingInput', V.createBuildingSchema],
     ['UpdateBuildingInput', V.updateBuildingSchema],
     ['CreateWingInput', V.createWingSchema],
@@ -600,7 +627,8 @@ export function buildOpenApiDocument(): Record<string, unknown> {
     get: op({ tag: 'Platform', summary: 'Get a society', operationId: 'getSociety', security: platformOnly,
       responses: { 200: okJson(envelope(ref('Society')), 'Society'), ...STANDARD_ERRORS } }),
     patch: op({ tag: 'Platform', summary: 'Update a society', operationId: 'updateSociety', security: platformOnly, body: ref('UpdateSocietyInput'),
-      responses: { 200: okJson(envelope(ref('Society')), 'Updated'), ...STANDARD_ERRORS } }),
+      description: 'Partial update of the society record. Unknown fields are rejected rather than stripped, so a misspelled key cannot answer 200 having changed nothing. `tier` and `modules` are deliberately absent: entitlements are read from the tenant subscription mirror, so use `PUT /{id}/subscription` — setting them here would change only what this panel displays.',
+      responses: { 200: okJson(envelope(ref('Society')), 'Updated'), ...errResponses([422, 'An unknown or plan-owned field was supplied']), ...STANDARD_ERRORS } }),
   };
   paths[`${P}/{id}/provision`] = {
     post: op({ tag: 'Platform', summary: 'Provision (or repair) the society database', operationId: 'provisionSociety', security: platformOnly,
@@ -612,21 +640,30 @@ export function buildOpenApiDocument(): Record<string, unknown> {
       responses: { 200: okJson(envelope(ref('Society')), 'Active'), ...STANDARD_ERRORS } }),
   };
   paths[`${P}/{id}/status`] = {
-    patch: op({ tag: 'Platform', summary: 'Suspend or reinstate a society', operationId: 'setSocietyStatus', security: platformOnly,
-      body: { type: 'object', properties: { status: { type: 'string', enum: ['active', 'suspended', 'archived'] }, reason: { type: 'string' } }, required: ['status'] },
-      responses: { 200: okJson(envelope(ref('Society')), 'Status changed'), ...STANDARD_ERRORS } }),
+    post: op({ tag: 'Platform', summary: 'Suspend or reinstate a society', operationId: 'setSocietyStatus', security: platformOnly,
+      description: 'Suspension takes effect immediately: every request from that society\'s users is rejected until it is reinstated. The reason is written to the platform audit trail.',
+      body: ref('PlatformSetStatusInput'),
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Status changed'), ...STANDARD_ERRORS } }),
   };
   paths[`${P}/{id}/onboarding`] = {
+    get: op({ tag: 'Platform', summary: 'Onboarding state and checklist', operationId: 'getOnboarding', security: platformOnly,
+      description: 'Returns the current step, the completed steps, whether the database is provisioned, live counts, and a checklist of what still blocks activation.',
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Onboarding state'), ...STANDARD_ERRORS } }),
     post: op({ tag: 'Platform', summary: 'Advance onboarding state', operationId: 'advanceOnboarding', security: platformOnly,
+      description: 'Records a step. `dryRun` reports what the step would save without writing, so an operator can validate a payload first.',
+      body: ref('PlatformOnboardingInput'),
       responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Onboarding step recorded'), ...STANDARD_ERRORS } }),
-    patch: op({ tag: 'Platform', summary: 'Set onboarding state', operationId: 'setOnboarding', security: platformOnly,
-      body: { type: 'object', additionalProperties: true },
-      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Updated'), ...STANDARD_ERRORS } }),
   };
   paths[`${P}/{id}/subscription`] = {
-    patch: op({ tag: 'Platform', summary: 'Change the subscription plan', operationId: 'setSubscription', security: platformOnly,
-      body: js(V.createSubscriptionSchema),
+    put: op({ tag: 'Platform', summary: 'Change the subscription plan', operationId: 'setSubscription', security: platformOnly,
+      description: 'The only route that changes what a society is entitled to. It resolves `planId` from the catalogue, derives the module set from the tier when none is given, recomputes limits and the renewal date, and re-syncs the tenant subscription mirror that `requireModule` actually reads. Setting `tier` on the society document does none of this, which is why the update schema rejects it.',
+      body: ref('PlatformSubscriptionInput'),
       responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Subscription updated'), ...STANDARD_ERRORS } }),
+  };
+  paths[`${P}/{id}/rebuild-directory`] = {
+    post: op({ tag: 'Platform', summary: 'Rebuild the login directory', operationId: 'rebuildIdentityDirectory', security: platformOnly,
+      description: 'Regenerates the identifier→user directory a society signs in through. Use after a bulk import or when a login cannot be resolved despite the user existing.',
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Directory rebuilt'), ...STANDARD_ERRORS } }),
   };
   paths[`${P}/{id}/stats`] = {
     get: op({ tag: 'Platform', summary: 'Per-society usage stats', operationId: 'societyStats', security: platformOnly,
@@ -636,7 +673,8 @@ export function buildOpenApiDocument(): Record<string, unknown> {
     get: op({ tag: 'Platform', summary: 'List society admins', operationId: 'listSocietyAdmins', security: platformOnly,
       responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Admins'), ...STANDARD_ERRORS } }),
     post: op({ tag: 'Platform', summary: 'Invite a society admin', operationId: 'inviteSocietyAdmin', security: platformOnly,
-      body: { type: 'object', properties: { email: { type: 'string', format: 'email' }, fullName: { type: 'string' }, phone: { type: 'string' } }, required: ['email', 'fullName'] },
+      description: 'Creates a login in the society\'s own database. Enforced against the plan\'s `maxAdmins` limit, so the request fails rather than silently exceeding it. Either an email or a phone is needed for the administrator to sign in.',
+      body: ref('PlatformInviteAdminInput'),
       responses: { 201: okJson(envelope({ type: 'object', additionalProperties: true }), 'Invited'), ...STANDARD_ERRORS } }),
   };
   paths[`${P}/{id}/audit-logs`] = {
@@ -852,23 +890,165 @@ export function buildOpenApiDocument(): Record<string, unknown> {
       responses: { 200: okJson(envelope({ type: 'array', items: { type: 'object', additionalProperties: true } }), 'Comments'), ...STANDARD_ERRORS } }),
   };
   Object.assign(paths, crudPaths({ base: '/api/work-orders', tag: 'Helpdesk', label: 'WorkOrder', create: V.createWorkOrderSchema, update: V.updateWorkOrderSchema }));
+  const W = '/api/work-orders';
+  paths[`${W}/my`] = {
+    get: op({
+      tag: 'Helpdesk', summary: 'My work orders', operationId: 'myWorkOrders',
+      description: 'The vendor or staff app\'s own queue. Scoped to the caller\'s vendorId or staffId resolved from the token — never from a client-supplied id — so one vendor cannot see another\'s jobs.',
+      params: [{ name: 'status', in: 'query', schema: { type: 'string' } }, { name: 'open', in: 'query', schema: { type: 'boolean' }, description: 'Defaults to true: excludes CLOSED, CANCELLED and VERIFIED' }],
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Your work orders'), ...STANDARD_ERRORS },
+    }),
+  };
+  paths[`${W}/{id}/status`] = {
+    parameters: [ID_PARAM],
+    patch: op({
+      tag: 'Helpdesk', summary: 'Move a work order on', operationId: 'progressWorkOrder',
+      description: 'Appends to the work order\'s history and notifies the resident. Marking COMPLETED with a note also records the resolution summary shown to them. POST is accepted as an alias for clients that cannot send PATCH.',
+      body: js(V.workOrderProgressSchema),
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Work order updated'), ...STANDARD_ERRORS },
+    }),
+    post: op({
+      tag: 'Helpdesk', summary: 'Move a work order on (alias)', operationId: 'progressWorkOrderAlias',
+      body: js(V.workOrderProgressSchema),
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Work order updated'), ...STANDARD_ERRORS },
+    }),
+  };
+  paths[`${W}/{id}/history`] = {
+    parameters: [ID_PARAM],
+    get: op({
+      tag: 'Helpdesk', summary: 'Status history for a work order', operationId: 'workOrderHistory',
+      description: 'Every transition with its actor, note, progress percentage and cost — the evidence trail behind a job.',
+      responses: { 200: okJson(envelope({ type: 'array', items: { type: 'object', additionalProperties: true } }), 'History'), ...STANDARD_ERRORS },
+    }),
+  };
   Object.assign(paths, crudPaths({ base: '/api/service-requests', tag: 'Helpdesk', label: 'ServiceRequest', create: V.createServiceRequestSchema, update: V.updateServiceRequestSchema }));
   Object.assign(paths, crudPaths({ base: '/api/vendors', tag: 'Helpdesk', label: 'Vendor', create: V.createVendorSchema, update: V.updateVendorSchema }));
   Object.assign(paths, crudPaths({ base: '/api/staff', tag: 'Helpdesk', label: 'Staff', create: V.createStaffSchema, update: V.updateStaffSchema }));
+  paths['/api/staff/{id}/login'] = {
+    parameters: [ID_PARAM],
+    post: op({
+      tag: 'Helpdesk', summary: 'Issue or reset a staff login', operationId: 'provisionStaffLogin',
+      description: 'Creates (or rotates) the user account behind a staff record, back-links it with `users.staffId`, sets `staff.userId` + `allowLogin`, and registers the account in the cross-society identity directory so the guard or staff app accepts the phone number immediately. The role is derived server-side from the staff record\'s `type` and can only ever be one of the society-staff roles — never an administrator, resident or platform role. With no `password` a temporary one is generated from unambiguous alphabets (no 0/O, 1/I/l), returned exactly once, and forces a change at first sign-in. A phone already owned by another account in this society is refused with 409 rather than duplicated.',
+      body: {
+        type: 'object',
+        properties: {
+          password: { type: 'string', description: 'Omit to generate a temporary password' },
+          role: { type: 'string', enum: ['SECURITY_GUARD', 'SECURITY_SUPERVISOR', 'FACILITY_MANAGER', 'RECEPTIONIST', 'ACCOUNTANT', 'MAINTENANCE_STAFF', 'ELECTRICIAN', 'PLUMBER', 'HOUSEKEEPING', 'GARDENER', 'DRIVER', 'DOMESTIC_STAFF'], description: 'Defaults from the staff record\'s type' },
+          mustChangePassword: { type: 'boolean', description: 'Always true for a generated password' },
+        },
+        additionalProperties: false,
+      },
+      responses: {
+        200: okJson(envelope({
+          type: 'object',
+          properties: {
+            staffId: str_(), userId: str_(), role: str_('The role that was granted'),
+            identifier: str_('Phone number they sign in with'),
+            temporaryPassword: { type: ['string', 'null'], description: 'Present only when the server generated it, and only in this response' },
+            mustChangePassword: { type: 'boolean' },
+          },
+          required: ['staffId', 'userId', 'role', 'identifier', 'mustChangePassword'],
+        }), 'Login issued'),
+        ...errResponses([404, 'No such staff member in this society'], [409, 'That phone already belongs to another account here']),
+        ...STANDARD_ERRORS,
+      },
+    }),
+    delete: op({
+      tag: 'Helpdesk', summary: 'Revoke a staff login', operationId: 'revokeStaffLogin',
+      description: 'Deactivates the account and clears `allowLogin`, but keeps the staff record so attendance and closed work orders survive.',
+      responses: { 200: okJson(envelope({ type: 'object', properties: { staffId: str_(), revoked: { type: 'boolean' } }, required: ['staffId', 'revoked'] }), 'Login revoked'), ...STANDARD_ERRORS },
+    }),
+  };
 
   // ── Amenities & bookings ───────────────────────────────────────────────
   Object.assign(paths, crudPaths({ base: '/api/amenities', tag: 'Amenities', label: 'Amenity', create: V.createAmenitySchema, update: V.updateAmenitySchema }));
   const B = '/api/amenity-bookings';
   Object.assign(paths, crudPaths({ base: B, tag: 'Amenities', label: 'AmenityBooking', create: V.createBookingSchema, update: V.createBookingSchema.partial() }));
-  paths[`${B}/availability`] = {
-    get: op({ tag: 'Amenities', summary: 'Slot availability for a date', operationId: 'bookingAvailability',
-      description: 'Accounts for capacity, existing confirmed bookings and the society\'s notice period, so the app never offers a slot that will be rejected.',
-      params: [{ name: 'amenityId', in: 'query', required: true, schema: { type: 'string' } }, { name: 'date', in: 'query', required: true, schema: { type: 'string', format: 'date' } }],
-      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Available slots'), ...STANDARD_ERRORS } }),
+  // Availability hangs off the *amenity*, not the booking: it is a property of a facility on a
+  // date, and asking a booking collection for it reads as though a booking must already exist.
+  paths['/api/amenities/{id}/availability'] = {
+    parameters: [ID_PARAM],
+    get: op({
+      tag: 'Amenities', summary: 'Slot availability for an amenity on a date', operationId: 'amenityAvailability',
+      description: 'Concrete slots with capacity, how many are already booked, what remains, the fee and deposit, and whether each slot is free or in the past. Accounts for the society\'s notice period and closed days, so a client never offers a slot that will be rejected.',
+      params: [{ name: 'date', in: 'query', required: true, schema: { type: 'string', format: 'date' }, description: 'YYYY-MM-DD in the society timezone' }],
+      responses: {
+        200: okJson(envelope({
+          type: 'object',
+          properties: {
+            amenityId: str_(), amenity: { type: 'object', additionalProperties: true },
+            date: { type: 'string', format: 'date' }, timezone: str_(),
+            closed: { type: 'boolean', description: 'True when the amenity does not open on this day' },
+            slots: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  startTime: str_('HH:mm'), endTime: str_('HH:mm'),
+                  slotId: { type: ['string', 'null'], description: 'Set once a slot row has been materialised' },
+                  capacity: { type: 'integer' }, booked: { type: 'integer' }, remaining: { type: 'integer' },
+                  fee: { type: 'number' }, deposit: { type: 'number' },
+                  available: { type: 'boolean' }, isPast: { type: 'boolean' },
+                },
+                required: ['startTime', 'endTime', 'capacity', 'booked', 'remaining', 'available', 'isPast'],
+              },
+            },
+          },
+          required: ['amenityId', 'date', 'slots'],
+        }), 'Slots for that day'),
+        ...STANDARD_ERRORS,
+      },
+    }),
+  };
+  paths['/api/amenities/{id}/slots'] = {
+    parameters: [ID_PARAM],
+    get: op({
+      tag: 'Amenities', summary: 'The defined slot rows for an amenity', operationId: 'listAmenitySlots',
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Slot definitions'), ...STANDARD_ERRORS },
+    }),
+    post: op({
+      tag: 'Amenities', summary: 'Define the slot rows for an amenity', operationId: 'defineAmenitySlots',
+      description: 'Materialises the recurring time grid so bookings can reference a concrete slot row.',
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Slots defined'), ...STANDARD_ERRORS },
+    }),
+  };
+  paths['/api/amenities/slots/{slotId}'] = {
+    parameters: [{ name: 'slotId', in: 'path', required: true, schema: { type: 'string' } }],
+    delete: op({
+      tag: 'Amenities', summary: 'Remove a defined slot', operationId: 'deleteAmenitySlot',
+      responses: { 204: { description: 'Slot removed' }, ...STANDARD_ERRORS },
+    }),
   };
   paths[`${B}/mine`] = {
     get: op({ tag: 'Amenities', summary: 'My bookings', operationId: 'myBookings', params: LIST_PARAMS,
       responses: { 200: okJson(paginated(ref('AmenityBooking')), 'Bookings'), ...STANDARD_ERRORS } }),
+  };
+  paths[`${B}/calendar`] = {
+    get: op({
+      tag: 'Amenities', summary: 'Booking calendar for the committee', operationId: 'bookingCalendar',
+      description: 'Every booking in a date range across the society, for the admin calendar view. Optionally narrowed to one amenity.',
+      params: [
+        { name: 'amenityId', in: 'query', schema: { type: 'string' } },
+        { name: 'from', in: 'query', schema: { type: 'string', format: 'date' } },
+        { name: 'to', in: 'query', schema: { type: 'string', format: 'date' } },
+      ],
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Calendar'), ...STANDARD_ERRORS },
+    }),
+  };
+  paths[`${B}/{id}/check-out`] = {
+    parameters: [ID_PARAM],
+    post: op({
+      tag: 'Amenities', summary: 'Check out of an amenity', operationId: 'bookingCheckOut',
+      description: 'Closes the visit so the slot is released and the booking can be marked COMPLETED.',
+      responses: { 200: okJson(envelope(ref('AmenityBooking')), 'Checked out'), ...STANDARD_ERRORS },
+    }),
+  };
+  paths[`${B}/reconcile`] = {
+    post: op({
+      tag: 'Amenities', summary: 'Reconcile stuck booking payments', operationId: 'reconcileBookings',
+      description: 'Sweeps bookings left in PENDING_PAYMENT whose payment has in fact settled, and expires ones whose window has passed. Safe to run repeatedly.',
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Reconciliation result'), ...STANDARD_ERRORS },
+    }),
   };
   paths[`${B}/{id}/qr`] = {
     get: op({ tag: 'Amenities', summary: 'Entry QR for a confirmed booking', operationId: 'bookingQr', params: [ID_PARAM],
@@ -1018,6 +1198,76 @@ export function buildOpenApiDocument(): Record<string, unknown> {
   Object.assign(paths, crudPaths({ base: '/api/expenses', tag: 'Finance', label: 'Expense', create: V.createExpenseSchema, update: V.createExpenseSchema.partial() }));
   Object.assign(paths, crudPaths({ base: '/api/incomes', tag: 'Finance', label: 'Income', create: V.createIncomeSchema, update: V.createIncomeSchema.partial() }));
 
+  // ── Society self-service ───────────────────────────────────────────────
+  const So = '/api/society';
+  paths[So] = {
+    get: op({
+      tag: 'Society', summary: 'This society\'s profile, plan and counters', operationId: 'getMySociety',
+      description: 'The tenant-side view of the same data the platform manages. Returns the profile, the live entitlements, whether the tenant subscription mirror has drifted from the platform record, and a few counters.',
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Society profile'), ...STANDARD_ERRORS },
+    }),
+    patch: op({
+      tag: 'Society', summary: 'Update the self-service part of the profile', operationId: 'updateMySociety',
+      description: 'Contact details, address, timezone, logo and tax identifiers only. `name`, `slug`, `status` and `planCode` are platform-operator fields and are **rejected**, not silently ignored — a rename or a plan change has consequences outside this society\'s own database.',
+      body: {
+        type: 'object',
+        properties: {
+          registrationNumber: str_(), city: str_(), state: str_(), pincode: str_(),
+          timezone: str_(), contactPhone: str_(), contactEmail: str_(), websiteUrl: str_(),
+          logoUrl: { type: ['string', 'null'] }, gstin: str_(),
+          address: str_(),
+        },
+        additionalProperties: false,
+      },
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Updated'), ...errResponses([400, 'A platform-only field was supplied']), ...STANDARD_ERRORS },
+    }),
+  };
+  paths[`${So}/settings`] = {
+    get: op({
+      tag: 'Society', summary: 'All configurable rule namespaces', operationId: 'listSocietySettings',
+      description: 'Every namespace merged over the built-in defaults, alongside the defaults themselves, so an administrator can tell "switched off" from "never configured". These are rules real code paths read — `maintenance` drives bill generation, `visitor` drives the gate, `complaint` drives SLA due dates.',
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Settings by namespace'), ...STANDARD_ERRORS },
+    }),
+  };
+  paths[`${So}/settings/{namespace}`] = {
+    parameters: [{ name: 'namespace', in: 'path', required: true, schema: { type: 'string', enum: ['visitor', 'delivery', 'maintenance', 'amenity', 'complaint', 'security', 'emergency', 'tax', 'notification', 'theme', 'access'] }, description: 'One of the configurable namespaces' }],
+    put: op({
+      tag: 'Society', summary: 'Merge a patch into one namespace', operationId: 'updateSocietySettings',
+      description: 'Deep-merges, so a partial update never wipes sibling keys, and invalidates the settings cache so the change takes effect on the next request. An unknown namespace is rejected rather than written, otherwise a typo would create a row nothing reads.',
+      body: { type: 'object', properties: { value: { type: 'object', additionalProperties: true } }, required: ['value'], additionalProperties: false },
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Namespace saved'), ...errResponses([400, 'Unknown settings namespace']), ...STANDARD_ERRORS },
+    }),
+  };
+  paths[`${So}/modules`] = {
+    get: op({
+      tag: 'Society', summary: 'Module entitlements', operationId: 'listSocietyModules',
+      description: 'What this society is entitled to on its plan, what is actually switched on, and which modules would need an upgrade. Read-only: `requireModule` gates every route, and a society cannot enable a module for itself.',
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Modules'), ...STANDARD_ERRORS },
+    }),
+  };
+  paths[`${So}/roles`] = {
+    get: op({
+      tag: 'Society', summary: 'Roles and their effective permissions', operationId: 'listSocietyRoles',
+      description: 'The role catalogue seeded for this society. The effective set is `permissions` minus `revokedPermissions` — the same subtraction `authenticate` performs.',
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Roles'), ...STANDARD_ERRORS },
+    }),
+  };
+  paths[`${So}/audit-logs`] = {
+    get: op({
+      tag: 'Society', summary: 'This society\'s audit trail', operationId: 'listSocietyAuditLogs',
+      description: 'Scoped by the society id resolved from the verified token, never by a query parameter — one society cannot read another\'s history even by guessing.',
+      params: [...LIST_PARAMS,
+        { name: 'module', in: 'query', schema: { type: 'string' } },
+        { name: 'action', in: 'query', schema: { type: 'string' } },
+        { name: 'actorId', in: 'query', schema: { type: 'string' } },
+        { name: 'recordId', in: 'query', schema: { type: 'string' } },
+        { name: 'severity', in: 'query', schema: { type: 'string', enum: ['INFO', 'NOTICE', 'WARNING', 'CRITICAL'] } },
+        { name: 'from', in: 'query', schema: { type: 'string', format: 'date-time' } },
+        { name: 'to', in: 'query', schema: { type: 'string', format: 'date-time' } }],
+      responses: { 200: okJson({ type: 'object', additionalProperties: true }, 'Audit entries'), ...STANDARD_ERRORS },
+    }),
+  };
+
   return {
     openapi: '3.1.0',
     info: {
@@ -1068,6 +1318,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
       { name: 'Helpdesk', description: 'Complaints, work orders, service requests, vendors, staff' },
       { name: 'Amenities', description: 'Amenities, slot availability, bookings and entry passes' },
       { name: 'Finance', description: 'Bills, payments, receipts, ledgers and financial statements' },
+      { name: 'Society', description: 'A society managing itself: profile, configurable rules, module entitlements, roles, audit trail' },
     ],
     security: [{ bearerAuth: [] }],
     components: {

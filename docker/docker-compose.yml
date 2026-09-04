@@ -1,0 +1,132 @@
+# Colonize — production-shaped local stack.
+#
+#   npm run docker:up      # build + start mongo, redis and the API
+#   npm run docker:down    # stop (volumes persist)
+#
+# Three services, matching what the API expects in production:
+#   mongo  — one database *per society*, plus the platform database
+#   redis  — cache, rate-limit counters and the notification job queue
+#   api    — the compiled Node/Express service
+#
+# Secrets come from backend/.env.production, which ships with placeholders: generate real ones
+# before exposing this stack (see the header of that file).
+
+name: colonize
+
+services:
+  mongo:
+    image: mongo:7.0
+    restart: unless-stopped
+    # A *replica set* is not optional here: financial flows (payment capture, receipt posting,
+    # bill settlement) and the visitor entry/exit flow run inside transactions, and a standalone
+    # mongod cannot serve them — the driver would silently degrade to sequential writes.
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    volumes:
+      - mongo-data:/data/db
+    ports:
+      - "${MONGO_PORT:-27017}:27017"
+    healthcheck:
+      # Self-initiating single-node replica set, so `docker compose up` needs no manual step.
+      test:
+        [
+          "CMD",
+          "mongosh",
+          "--quiet",
+          "--eval",
+          "try { rs.status().ok } catch (e) { rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'mongo:27017' }] }).ok }",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 15
+      start_period: 25s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command:
+      [
+        "redis-server",
+        "--appendonly",
+        "yes",
+        "--maxmemory",
+        "256mb",
+        "--maxmemory-policy",
+        "allkeys-lru",
+      ]
+    volumes:
+      - redis-data:/data
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: colonize-api:latest
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - ../backend/.env.production
+    environment:
+      # Service discovery names win over anything in the env file.
+      NODE_ENV: production
+      DB_DRIVER: mongo
+      DATABASE_URL: mongodb://mongo:27017/?replicaSet=rs0
+      QUEUE_DRIVER: redis
+      CACHE_DRIVER: redis
+      REDIS_URL: redis://redis:6379
+      HOST: 0.0.0.0
+      PORT: "4000"
+    ports:
+      - "${API_PORT:-4000}:4000"
+    volumes:
+      # Uploaded documents and receipts (LOCAL_STORAGE_DIR). In a real deployment this is S3;
+      # STORAGE_PROVIDER=s3 makes the volume unnecessary.
+      - api-runtime:/app/backend/.runtime
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4000/api/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+  # One-shot: seeds Green Valley Residency (5 towers / 800 units / 1500 residents) into the
+  # stack above. Not started by `up` — run it explicitly:
+  #   docker compose -f docker/docker-compose.yml run --rm seed
+  seed:
+    image: colonize-api:latest
+    restart: "no"
+    depends_on:
+      mongo:
+        condition: service_healthy
+    profiles: ["tools"]
+    env_file:
+      - ../backend/.env.production
+    environment:
+      NODE_ENV: production
+      DB_DRIVER: mongo
+      DATABASE_URL: mongodb://mongo:27017/?replicaSet=rs0
+      # The seeder refuses to write demo data to a production environment unless this is set.
+      SEED_ALLOW_PRODUCTION: "true"
+    # The image is built from source, so tsx is gone; run the compiled seeder.
+    command: ["node", "backend/dist/db/seed/runSeed.js"]
+
+volumes:
+  mongo-data:
+  redis-data:
+  api-runtime:

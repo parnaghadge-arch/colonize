@@ -153,9 +153,52 @@ async function acquireResidentOtp() {
   throw new Error('Could not obtain a login OTP for any seeded resident (all rate-limited)');
 }
 
-const today = () => new Date().toISOString().slice(0, 10);
+/**
+ * Every date in this suite is a *local* date in the society's own timezone.
+ *
+ * These used to come from `toISOString()`, which is UTC. The seed society is Asia/Kolkata, so a run
+ * between 18:30 and 00:00 UTC asked the API for a day the society had already finished — slots came
+ * back `isPast` and passes were born expired. Deriving the date from the society's clock makes the
+ * suite mean the same thing whenever it runs.
+ */
+const SOCIETY_TZ = 'Asia/Kolkata';
+
+function localParts(at = new Date(), timeZone = SOCIETY_TZ) {
+  const p = new Intl.DateTimeFormat('en-GB', {
+    timeZone,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(at).reduce((acc, part) => Object.assign(acc, { [part.type]: part.value }), {});
+  return { date: `${p.year}-${p.month}-${p.day}`, minutes: Number(p.hour) * 60 + Number(p.minute) };
+}
+
+const today = () => localParts().date;
 const monthPeriod = () => today().slice(0, 7);
-const plusDays = (n) => new Date(Date.now() + n * 86_400_000).toISOString().slice(0, 10);
+const plusDays = (n) => localParts(new Date(Date.now() + n * 86_400_000)).date;
+const hhmm = (minutes) =>
+  `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+
+/**
+ * A visitor-pass window that contains *now*, in the shape the API asks for: a local `visitDate`
+ * plus `HH:mm` times inside that same day.
+ *
+ * The suite used to hard-code 10:00-20:00. The gate refuses a pass that has not started yet
+ * (QR_NOT_YET_VALID) and one that has ended (QR_EXPIRED), so any run after 20:00 local time minted
+ * a pass that was already expired and aborted the acceptance scenario at step 5.
+ */
+function visitWindow(at = new Date()) {
+  const now = localParts(at);
+  const start = Math.max(0, now.minutes - 60);           // the visit began an hour ago
+  const end = Math.min(24 * 60 - 1, now.minutes + 180);  // and runs three hours more
+  return { visitDate: now.date, expectedArrival: hhmm(start), expectedDeparture: hhmm(end) };
+}
+
+/** Whether an `HH:mm` falls inside the society's no-night-entry band (which wraps midnight). */
+function inNightBand(value, start = '22:00', end = '06:00') {
+  const toMinutes = (v) => Number(String(v).slice(0, 2)) * 60 + Number(String(v).slice(3, 5));
+  const t = toMinutes(value), s = toMinutes(start), e = toMinutes(end);
+  return s <= e ? t >= s && t < e : t >= s || t < e;
+}
 
 /**
  * Random but *format-valid* Indian plate: 2–3 letters, 1–4 digits, up to 3 letters, 1–4 digits
@@ -336,15 +379,38 @@ async function main() {
 
   /* ---- 4. pre-approved visitor + QR ---- */
   step(4, 'Resident pre-approves a visitor and gets a QR pass');
+
+  // The guard scans seconds later, so the window has to straddle the current local time. Late at
+  // night such a window necessarily sits inside the society's no-night-entry band, and pre-approval
+  // would be refused for a reason that has nothing to do with what step 5 is testing. Lift the
+  // restriction through the documented settings API for the duration of the gate flow, then put it
+  // back — the night rule itself stays covered by the unit tests.
+  const visit = visitWindow();
+  const settingsSnapshot = await call('GET', '/society/settings', { token: adminToken, headers: tenantHeaders });
+  const visitorSettings = settingsSnapshot.json?.data?.values?.visitor ?? {};
+  const nightStart = String(visitorSettings.nightStart ?? '22:00');
+  const nightEnd = String(visitorSettings.nightEnd ?? '06:00');
+  const allowNightBefore = visitorSettings.allowNightEntry === true;
+  const needsNightOverride = !allowNightBefore &&
+    (inNightBand(visit.expectedArrival, nightStart, nightEnd) ||
+     inNightBand(visit.expectedDeparture, nightStart, nightEnd));
+  if (needsNightOverride) {
+    await call('PUT', '/society/settings/visitor', {
+      token: adminToken,
+      headers: tenantHeaders,
+      body: { value: { allowNightEntry: true } },
+    });
+  }
+
   const preApproved = await call('POST', '/visitors/pre-approve', {
     token: residentToken,
     headers: tenantHeaders,
     body: {
       visitorName: 'E2E Guest Visitor',
       visitorPhone: '+919812300002',
-      visitDate: today(),
-      expectedArrival: '10:00',
-      expectedDeparture: '20:00',
+      visitDate: visit.visitDate,
+      expectedArrival: visit.expectedArrival,
+      expectedDeparture: visit.expectedDeparture,
       purpose: 'Family visit — acceptance test',
       visitorType: 'GUEST',
       numberOfVisitors: 2,
@@ -449,6 +515,15 @@ async function main() {
   check("the log holds this visit's OUT crossing",
     crossings.some((e) => String(e.visitorId) === visitorId && String(e.direction).toUpperCase() === 'OUT'),
     `visitorId=${visitorId}`);
+
+  // Put the society's night-entry rule back exactly as it was found.
+  if (needsNightOverride) {
+    await call('PUT', '/society/settings/visitor', {
+      token: adminToken,
+      headers: tenantHeaders,
+      body: { value: { allowNightEntry: allowNightBefore } },
+    });
+  }
 
   /* ---- 6. complaint lifecycle ---- */
   step(6, 'Complaint → vendor → resolution → resident verification → close');

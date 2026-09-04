@@ -57,3 +57,6 @@ Thumbs.db
 *.mobileprovision
 android/app/build/
 ios/Pods/
+
+# temporary partial-include typecheck harness (not for commit)
+apps/admin-web/tsconfig.probe.json

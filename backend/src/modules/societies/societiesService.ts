@@ -18,6 +18,7 @@ import { logSystemAudit } from '../../services/audit.js';
 import { updateSettings } from '../../services/settings.js';
 import { importUnitsFromCsv, createBuilding, createWing, generateUnits, type StructureContext } from '../structure/structureService.js';
 import { upsertMembership, rebuildForSociety } from '../../services/identityDirectory.js';
+import { invalidateSociety } from '../../services/cache.js';
 
 /**
  * Society lifecycle: signup → onboarding → activation → suspension → archive (§41, §45).
@@ -455,6 +456,14 @@ export async function createSocietyAdmin(ctx: StructureContext, input: Document,
 
 /* ------------------------------ activation --------------------------------- */
 
+/**
+ * Roles that make a user an administrator of their society.
+ *
+ * Exported so the router's admin listing and the activation guard below cannot drift apart — they
+ * used to be two copies of the same literal, and the guard did not use either.
+ */
+export const SOCIETY_ADMIN_ROLES = ['SOCIETY_ADMIN', 'CHAIRMAN', 'SECRETARY', 'TREASURER', 'COMMITTEE_MEMBER'];
+
 export async function activateSociety(ctx: SocietiesContext, societyId: string): Promise<Document> {
   const platform = await databases.platform();
   const society = await platform.collection('societies').findOne({ _id: societyId });
@@ -462,9 +471,17 @@ export async function activateSociety(ctx: SocietiesContext, societyId: string):
   if (!society.databaseProvisioned) await provisionSocietyDatabase(society);
 
   const db = await databases.tenantDb(societyId);
+  // Count users who hold an administrative role and are not disabled. PENDING counts: an
+  // administrator created during onboarding is deliberately left PENDING so they cannot sign in to a
+  // half-built society, and the update below is what activates them. Requiring an already-active
+  // administrator here made activation unreachable — it needed the very thing it was about to do.
   const [units, admins, gates] = await Promise.all([
     db.collection('units').countDocuments({ societyId }),
-    db.collection('users').countDocuments({ societyId, isActive: true }),
+    db.collection('users').countDocuments({
+      societyId,
+      roles: { $in: SOCIETY_ADMIN_ROLES },
+      status: { $in: ['PENDING', 'ACTIVE'] },
+    }),
     db.collection('gates').countDocuments({ societyId }),
   ]);
   if (units === 0) throw ApiError.badRequest('Create at least one unit before activating the society');
@@ -474,8 +491,22 @@ export async function activateSociety(ctx: SocietiesContext, societyId: string):
     { _id: societyId },
     { $set: { status: 'ACTIVE', onboardingStep: 'COMPLETED', onboardingCompletedAt: new Date(), updatedAt: new Date() } },
   );
-  // Pending administrators become active the moment the society goes live.
-  await db.collection('users').updateMany({ societyId, status: 'PENDING' }, { $set: { status: 'ACTIVE', isActive: true } });
+  // Pending administrators become active the moment the society goes live. Scoped to the
+  // administrative roles so an unrelated pending user is not activated as a side effect.
+  await db.collection('users').updateMany(
+    { societyId, status: 'PENDING', roles: { $in: SOCIETY_ADMIN_ROLES } },
+    { $set: { status: 'ACTIVE', isActive: true } },
+  );
+
+  // Same reason as setSocietyStatus: the newly ACTIVE status must be visible to the next request.
+  invalidateSociety(societyId);
+
+  // Sign-in resolves identifiers through the platform identity directory, not the tenant `users`
+  // collection. An administrator created during onboarding is registered there with
+  // `isActive: false` (deliberately: they must not reach a half-built society), so flipping only the
+  // user document left the directory saying "inactive" and the new administrator could not sign in
+  // even though activation had succeeded. Re-sync it from the users collection.
+  await rebuildForSociety(db, { id: societyId, name: String(society.name), slug: String(society.slug) });
 
   await logSystemAudit(platform, {
     collection: 'platform_audit_logs',
@@ -509,6 +540,10 @@ export async function setSocietyStatus(ctx: SocietiesContext, societyId: string,
   // Suspending a society locks every one of its users out on their very next request:
   // middleware/authenticate re-reads the society record (60s cache) and rejects anything that
   // is not ACTIVE/ONBOARDING.
+  // Suspension has to bite immediately: `authenticate` re-reads the society document on every
+  // request and rejects a non-ACTIVE one, but only if the cached copy is dropped first.
+  invalidateSociety(societyId);
+
   await logSystemAudit(platform, {
     collection: 'platform_audit_logs',
     societyId,

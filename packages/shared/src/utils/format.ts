@@ -167,10 +167,18 @@ export function maskEmail(input: unknown): string {
   return `${local.slice(0, 2)}${'•'.repeat(Math.min(6, local.length - 2))}@${domain}`;
 }
 
-const INR_DIGITS = /\B(?=(\d{3})+(?!\d))/g;
+/**
+ * Indian digit grouping: the last three digits stand alone and everything to their left is
+ * grouped in pairs — 1,00,000 (one lakh), 1,23,45,678 (1.23 crore).
+ *
+ * Note the pair grouping. The obvious `\d{3}` look-ahead produces Western grouping
+ * (1,234,567), which is wrong for every society this platform serves.
+ */
+const INR_DIGITS = /\B(?=(\d{2})+(?!\d))/g;
 
 /** 1234567.5 -> "12,34,567.50" (Indian digit grouping). */
 export function formatIndianNumber(value: number): string {
+  if (!Number.isFinite(value)) return '0';
   const negative = value < 0;
   const n = Math.abs(value);
   const fixed = Number.isInteger(n) ? String(n) : n.toFixed(2);

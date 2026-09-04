@@ -1,6 +1,10 @@
+import { normalisePhone } from '@colonize/shared';
 import type { Document, TenantDatabase } from '../../db/drivers/types.js';
 import { newId } from '../../db/ids.js';
+import { databases } from '../../db/manager.js';
 import { ApiError } from '../../utils/errors.js';
+import { hashPassword, randomBytesBuffer } from '../../services/crypto.js';
+import { upsertMembership } from '../../services/identityDirectory.js';
 import { getSettings } from '../../services/settings.js';
 import { nextReference } from '../../services/counters.js';
 import { NotificationService } from '../../services/notifications/index.js';
@@ -400,13 +404,18 @@ export async function updateWorkOrderStatus(
   if (status === 'CLOSED') stamp.closedAt = now;
   if (status === 'CANCELLED') stamp.closedAt = now;
 
+  // Once the work is done the job is 100% done. Leaving a caller-supplied 40% on a COMPLETED work
+  // order would put contradictory numbers on the resident's screen and in every report.
+  const isFinished = ['COMPLETED', 'VERIFIED', 'CLOSED'].includes(status);
+  const progressPercent = isFinished ? 100 : input.progressPercent;
+
   await ctx.db.collection('work_orders').updateOne(
     { societyId: ctx.societyId, _id: workOrderId },
     {
       $set: {
         status,
         ...stamp,
-        ...(input.progressPercent !== undefined ? { progressPercent: Number(input.progressPercent) } : {}),
+        ...(progressPercent !== undefined ? { progressPercent: Number(progressPercent) } : {}),
         ...(input.actualCost !== undefined ? { actualCost: Number(input.actualCost) } : {}),
         ...(input.materialCost !== undefined ? { materialCost: Number(input.materialCost) } : {}),
         ...(input.labourCost !== undefined ? { labourCost: Number(input.labourCost) } : {}),
@@ -414,7 +423,7 @@ export async function updateWorkOrderStatus(
         ...(input.resolutionSummary ? { feedback: input.resolutionSummary } : {}),
         updatedBy: ctx.actorId,
       },
-      $push: { history: { at: now, status, actorId: ctx.actorId, actorName: ctx.actorName ?? null, note: input.note ?? null, progressPercent: input.progressPercent ?? null } },
+      $push: { history: { at: now, status, actorId: ctx.actorId, actorName: ctx.actorName ?? null, note: input.note ?? null, progressPercent: progressPercent ?? null } },
     },
   );
 
@@ -797,4 +806,232 @@ export async function complaintStats(ctx: HelpDeskContext, days = 30): Promise<D
     byCategory,
     byPriority,
   };
+}
+
+/* ------------------------------ staff logins -------------------------------- */
+
+/**
+ * Roles a staff member may hold. Deliberately excludes resident and platform roles: this endpoint
+ * can only ever mint a society-staff identity, never an administrator or a super-admin one.
+ */
+export const STAFF_ROLES = [
+  'SECURITY_GUARD',
+  'SECURITY_SUPERVISOR',
+  'FACILITY_MANAGER',
+  'RECEPTIONIST',
+  'ACCOUNTANT',
+  'MAINTENANCE_STAFF',
+  'ELECTRICIAN',
+  'PLUMBER',
+  'HOUSEKEEPING',
+  'GARDENER',
+  'DRIVER',
+  'DOMESTIC_STAFF',
+] as const;
+
+export type StaffRole = (typeof STAFF_ROLES)[number];
+
+/** Maps the employment `type` on the staff record to the role that unlocks the right screens. */
+const ROLE_FOR_STAFF_TYPE: Record<string, StaffRole> = {
+  SECURITY: 'SECURITY_GUARD',
+  MAINTENANCE: 'MAINTENANCE_STAFF',
+  TECHNICIAN: 'MAINTENANCE_STAFF',
+  ELECTRICIAN: 'ELECTRICIAN',
+  PLUMBER: 'PLUMBER',
+  HOUSEKEEPING: 'HOUSEKEEPING',
+  CLEANER: 'HOUSEKEEPING',
+  GARDENER: 'GARDENER',
+  DRIVER: 'DRIVER',
+  RECEPTIONIST: 'RECEPTIONIST',
+  MANAGER: 'FACILITY_MANAGER',
+};
+
+function roleForStaff(staff: Document, requested?: string): StaffRole {
+  if (requested && (STAFF_ROLES as readonly string[]).includes(requested)) return requested as StaffRole;
+  const fromType = ROLE_FOR_STAFF_TYPE[String(staff.type ?? '').toUpperCase()];
+  return fromType ?? 'MAINTENANCE_STAFF';
+}
+
+/**
+ * Issue (or reset) the login for a staff member — §26.
+ *
+ * A staff row on its own cannot authenticate; `users` is the thing that can. This creates the
+ * matching user, links it back with `staff.userId`, and registers the account in the cross-society
+ * identity directory so the guard app accepts the phone number on the very first attempt.
+ *
+ * When no password is supplied a strong one is generated and returned exactly once, with
+ * `mustChangePassword` set so it cannot survive the first sign-in.
+ */
+export async function provisionStaffLogin(
+  ctx: HelpDeskContext,
+  staffId: string,
+  input: { password?: string; role?: string; mustChangePassword?: boolean },
+): Promise<{ staffId: string; userId: string; role: StaffRole; identifier: string; temporaryPassword: string | null; mustChangePassword: boolean }> {
+  const staff = await ctx.db.collection('staff').findOne({ societyId: ctx.societyId, _id: staffId });
+  if (!staff) throw ApiError.notFound('Staff member');
+
+  const phone = normalisePhone(String(staff.phone ?? ''));
+  if (!phone) throw ApiError.badRequest('This staff member has no phone number to sign in with');
+
+  const role = roleForStaff(staff, input.role);
+  const temporaryPassword = input.password ? null : generateTemporaryPassword();
+  const password = input.password ?? temporaryPassword!;
+  const passwordHash = await hashPassword(password);
+  // A generated password is always single-use; an admin-chosen one only if they asked for it.
+  const mustChangePassword = temporaryPassword ? true : (input.mustChangePassword ?? false);
+
+  const existingUserId = staff.userId ? String(staff.userId) : null;
+  let user = existingUserId ? await ctx.db.collection('users').findById(existingUserId) : null;
+
+  if (user) {
+    // Re-issuing for someone who already has an account: rotate the credential and the role.
+    const patch: Document = {
+      passwordHash,
+      roles: [role],
+      mustChangePassword,
+      status: 'ACTIVE',
+      isActive: true,
+      failedLoginCount: 0,
+      lockedUntil: null,
+      fullName: String(staff.fullName ?? user.fullName),
+      // `users.staffId` is the back-link the auth layer uses to resolve a staff membership.
+      staffId,
+      updatedBy: ctx.actorId,
+    };
+    await ctx.db.collection('users').updateOne({ _id: user._id }, { $set: patch });
+    user = { ...user, ...patch };
+  } else {
+    // The phone may already belong to another account in this society — never mint a duplicate.
+    const clash = await ctx.db.collection('users').findOne({ societyId: ctx.societyId, phone });
+    if (clash) {
+      throw ApiError.conflict('Another account in this society already uses that phone number');
+    }
+
+    user = await ctx.db.collection('users').create({
+      _id: newId('users'),
+      societyId: ctx.societyId,
+      fullName: String(staff.fullName ?? ''),
+      phone,
+      email: staff.email ? String(staff.email) : null,
+      passwordHash,
+      roles: [role],
+      staffId,
+      status: 'ACTIVE',
+      isActive: true,
+      isVerified: true,
+      mustChangePassword,
+      avatarUrl: staff.photoUrl ? String(staff.photoUrl) : null,
+      gender: null,
+      dateOfBirth: null,
+      lastLoginAt: null,
+      failedLoginCount: 0,
+      lockedUntil: null,
+      pushTokens: [],
+      preferences: {},
+      createdSource: 'staff-provisioning',
+      createdBy: ctx.actorId,
+      updatedBy: ctx.actorId,
+    });
+  }
+
+  await ctx.db.collection('staff').updateOne(
+    { societyId: ctx.societyId, _id: staffId },
+    { $set: { userId: user._id, allowLogin: true, updatedBy: ctx.actorId } },
+  );
+
+  const platform = await databases.platform();
+  const society = await platform.collection('societies').findById(ctx.societyId);
+  await upsertMembership({
+    societyId: ctx.societyId,
+    societyName: String(society?.name ?? ''),
+    societySlug: String(society?.slug ?? ''),
+    userId: String(user._id),
+    phone,
+    email: staff.email ? String(staff.email) : undefined,
+    roles: [role],
+    unitIds: [],
+    status: 'ACTIVE',
+    isActive: true,
+  });
+
+  logger.info({ societyId: ctx.societyId, staffId, userId: String(user._id), role }, 'staff login provisioned');
+
+  return {
+    staffId,
+    userId: String(user._id),
+    role,
+    identifier: phone,
+    temporaryPassword,
+    mustChangePassword,
+  };
+}
+
+/**
+ * Deactivate a staff login without deleting the staff record: attendance and work-order history
+ * must survive, but the account stops authenticating.
+ */
+export async function revokeStaffLogin(ctx: HelpDeskContext, staffId: string): Promise<{ staffId: string; revoked: boolean }> {
+  const staff = await ctx.db.collection('staff').findOne({ societyId: ctx.societyId, _id: staffId });
+  if (!staff) throw ApiError.notFound('Staff member');
+  if (!staff.userId) return { staffId, revoked: false };
+
+  await ctx.db.collection('users').updateOne(
+    { _id: String(staff.userId) },
+    { $set: { isActive: false, status: 'INACTIVE', updatedBy: ctx.actorId } },
+  );
+  await ctx.db.collection('staff').updateOne(
+    { societyId: ctx.societyId, _id: staffId },
+    { $set: { allowLogin: false, updatedBy: ctx.actorId } },
+  );
+
+  const platform = await databases.platform();
+  const society = await platform.collection('societies').findById(ctx.societyId);
+  await upsertMembership({
+    societyId: ctx.societyId,
+    societyName: String(society?.name ?? ''),
+    societySlug: String(society?.slug ?? ''),
+    userId: String(staff.userId),
+    phone: staff.phone ? normalisePhone(String(staff.phone)) : undefined,
+    roles: [],
+    unitIds: [],
+    status: 'INACTIVE',
+    isActive: false,
+  });
+
+  logger.info({ societyId: ctx.societyId, staffId }, 'staff login revoked');
+  return { staffId, revoked: true };
+}
+
+/**
+ * A temporary password the admin can read out over the phone: unambiguous characters only, and it
+ * always satisfies the platform password policy (length + letter + number).
+ */
+function generateTemporaryPassword(): string {
+  // Every alphabet below omits the characters that get misread when an administrator reads a
+  // password out over the phone: no 0/O, no 1/I/l.
+  const consonants = 'BCDFGHJKMNPQRSTVWXZ';
+  const vowels = 'AEU';
+  const digits = '23456789';
+  const pick = (alphabet: string): string => alphabet[randomInt(alphabet.length)];
+
+  // Four letter pairs plus four digits, shuffled, keeps it pronounceable but not guessable.
+  const body: string[] = [];
+  for (let i = 0; i < 4; i += 1) {
+    body.push(pick(consonants), pick(vowels));
+  }
+  for (let i = 0; i < 4; i += 1) body.push(pick(digits));
+
+  for (let i = body.length - 1; i > 0; i -= 1) {
+    const j = randomInt(i + 1);
+    [body[i], body[j]] = [body[j], body[i]];
+  }
+  return body.join('');
+}
+
+/** Unbiased integer in [0, max) — `randomBytes` rather than `Math.random` for credential material. */
+function randomInt(max: number): number {
+  const limit = Math.floor(0x1_0000_0000 / max) * max;
+  let value = randomBytesBuffer(4).readUInt32BE(0);
+  while (value >= limit) value = randomBytesBuffer(4).readUInt32BE(0);
+  return value % max;
 }
