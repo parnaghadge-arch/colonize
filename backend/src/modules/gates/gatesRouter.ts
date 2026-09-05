@@ -1,6 +1,15 @@
-import { Router } from 'express';
+import { Router, type RequestHandler } from 'express';
 import { z } from 'zod';
-import { createGateSchema, updateGateSchema, createGuardAssignmentSchema, guardShiftLoginSchema, idSchema } from '@colonize/shared/validation';
+import type { ModuleKey } from '@colonize/shared';
+import {
+  createGateSchema,
+  updateGateSchema,
+  createGuardAssignmentSchema,
+  guardShiftLoginSchema,
+  idSchema,
+  createStaffSchema,
+  updateStaffSchema,
+} from '@colonize/shared/validation';
 import { buildCrudRouter } from '../_shared/crud.js';
 import { authenticate, requireTenantContext } from '../../middleware/authenticate.js';
 import { requirePermission } from '../../middleware/permissions.js';
@@ -18,9 +27,13 @@ import * as visitorsService from '../visitors/visitorsService.js';
  *   GET  /api/gates                    the society's gates
  *   GET  /api/gates/my                 which gate this guard is posted at right now
  *   POST /api/gates/:id/assign         post a guard to a gate for a shift
+ *   GET  /api/gates/dashboard          live numbers for the security console
+ *   GET  /api/guards/dashboard         same dashboard, on the documented /guards path
  *   POST /api/guards/shift/login       guard starts a shift from the app
  *   POST /api/guards/shift/logout      guard ends a shift
- *   GET  /api/gates/dashboard          live numbers for the security console
+ *
+ *   /api/guards also carries the guard roster CRUD — the staff collection scoped to
+ *   `type: 'SECURITY'`, so a "guard" is always a staff record and both views stay in sync.
  */
 
 function ctxFrom(req: import('express').Request): visitorsService.VisitorsContext {
@@ -138,12 +151,14 @@ gatesRouter.get(
   }),
 );
 
-/** Live security console numbers (§34). */
-gatesRouter.get(
-  '/dashboard',
-  authenticate({ clientScopes: ['security', 'console'] }),
-  requirePermission('gate:view', 'visitor:view'),
-  asyncHandler(async (req, res) => {
+/**
+ * Live security console numbers (§34).
+ *
+ * One handler, two documented paths: the OpenAPI contract names it `/api/guards/dashboard`
+ * (the guard console), while `/api/gates/dashboard` has existed since the first gate console.
+ * Both mount the same logic so neither client ever meets a 404.
+ */
+const securityDashboardHandler: RequestHandler = asyncHandler(async (req, res) => {
     const c = requireTenantContext(req);
     const queue = await visitorsService.gateQueue(ctxFrom(req), { gateId: c.membership.gateIds[0] ?? null });
 
@@ -183,8 +198,14 @@ gatesRouter.get(
       },
       'Security dashboard fetched',
     );
-  }),
-);
+});
+
+const securityDashboardGuards: RequestHandler[] = [
+  authenticate({ clientScopes: ['security', 'console'] }),
+  requirePermission('gate:view', 'visitor:view'),
+];
+
+gatesRouter.get('/dashboard', ...securityDashboardGuards, securityDashboardHandler);
 
 /** Post a guard to a gate for a shift (§46). */
 gatesRouter.post(
@@ -459,5 +480,52 @@ guardsRouter.delete(
     return ok(res, { removed: String(req.params.id) }, 'Guard unposted from that gate');
   }),
 );
+
+/** Guard console dashboard, on its documented path. */
+guardsRouter.get('/dashboard', ...securityDashboardGuards, securityDashboardHandler);
+
+/* ------------------------- guard roster CRUD (staff) ------------------------ */
+/**
+ * The guard roster is the staff collection scoped to `type: 'SECURITY'`.
+ *
+ * Scoping is enforced three ways so the subset can never leak or drift:
+ *   • `listFilter` restricts every list query,
+ *   • `assertGuardDoc` (extraMiddleware) 404s any `/:id` that is not a guard, so the
+ *     generic CRUD's single-read/update/delete paths can only ever touch guard rows,
+ *   • `prepareCreate` / `prepareUpdate` force `type: 'SECURITY'`, so a row created or
+ *     edited here is and stays a guard.
+ */
+const assertGuardDoc: RequestHandler = asyncHandler(async (req, _res, next) => {
+  if (!req.params.id) return next();
+  const ctx = requireTenantContext(req);
+  const doc = await ctx.db.collection('staff').findOne({ societyId: ctx.society.id, _id: String(req.params.id) });
+  // Missing rows fall through to the handler, which raises the standard 404.
+  if (!doc) return next();
+  if (String(doc.type) !== 'SECURITY') throw ApiError.notFound('Guard');
+  next();
+});
+
+const guardsCrud = buildCrudRouter<z.infer<typeof createStaffSchema>, z.infer<typeof updateStaffSchema>>({
+  collection: 'staff',
+  unitScoped: false, // society-wide: no unitId column on this collection
+  permission: 'guard',
+  moduleKey: 'staffAttendance' as ModuleKey,
+  label: 'Guard',
+  createSchema: createStaffSchema,
+  updateSchema: updateStaffSchema,
+  searchFields: ['fullName', 'phone', 'email', 'shift'],
+  filterFields: ['shift', 'status', 'gateId', 'allowLogin', 'employmentType', 'workType'],
+  sortableFields: ['fullName', 'shift', 'joiningDate', 'monthlySalary', 'createdAt'],
+  defaultSort: 'fullName',
+  listFilter: () => ({ type: 'SECURITY' }),
+  extraMiddleware: [assertGuardDoc],
+  serialise: { revealContact: true, omit: ['idProofNumber'] },
+  prepareCreate: (ctx, body) => ({ ...body, type: 'SECURITY', createdBy: ctx.principal.userId, updatedBy: ctx.principal.userId }),
+  prepareUpdate: (ctx, _existing, body) => ({ ...body, type: 'SECURITY', updatedBy: ctx.principal.userId }),
+});
+
+// Mounted last on purpose: the explicit /shift/*, /on-duty and /assignments routes above must
+// win over the CRUD's generic `/:id` routes.
+guardsRouter.use(guardsCrud);
 
 export default gatesRouter;

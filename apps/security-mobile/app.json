@@ -1,0 +1,33 @@
+{
+  "expo": {
+    "name": "Colonize Security",
+    "slug": "colonize-security",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "backgroundColor": "#0f172a",
+    "splash": {
+      "backgroundColor": "#0f172a",
+      "resizeMode": "contain"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "local.colonize.security",
+      "infoPlist": {
+        "NSCameraUsageDescription": "The security app scans QR gate passes at the gate."
+      }
+    },
+    "android": {
+      "package": "local.colonize.security",
+      "edgeToEdgeEnabled": true,
+      "permissions": ["CAMERA"]
+    },
+    "web": {
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-secure-store"
+    ]
+  }
+}

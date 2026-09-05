@@ -16,42 +16,137 @@ No Next.js anywhere.
 | Area | State |
 | --- | --- |
 | `packages/shared` | ✅ Complete — shared types, enums, plan tiers, module keys |
-| `backend` | ✅ Complete — 137 OpenAPI paths, RBAC, tenant isolation, soft deletes, audit log, transactions |
+| `backend` | ✅ Complete — 153 OpenAPI paths, RBAC, tenant isolation, soft deletes, audit log, transactions |
 | Seed data (Green Valley Residency) | ✅ Complete — 5 towers / 20 wings / 800 units / 1500 residents / 50 staff / 10 vendors / 5 gates |
 | §80 acceptance scenario | ✅ Verified end to end — `npm run e2e` → **117/117 checks, 11 scenario groups** |
 | Docker + production env | ✅ Complete — `docker/Dockerfile`, `docker/docker-compose.yml`, `.env.production` |
-| `apps/admin-web`, `apps/super-admin-web` | ⏳ Not started |
-| `apps/resident-mobile`, `apps/security-mobile` | ⏳ Not started |
-| Vitest unit / integration suites | ⏳ Not started (the E2E acceptance suite above is the current coverage) |
+| `apps/admin-web`, `apps/super-admin-web` | ✅ Complete — React + Vite consoles (society office / platform) |
+| `apps/resident-mobile`, `apps/security-mobile` | ✅ Complete — Expo (React Native) resident + guard apps |
+| Vitest unit / integration suites | ✅ Complete — 15 files / 370 tests (`npm test -w backend`) |
+| Mobile contract check | ✅ Complete — `node backend/scripts/mobile-contract-check.mjs` verifies every endpoint the mobile apps call |
 
 The backend is a fully working product surface — every endpoint listed in `/docs` is real, not stubbed.
 
 ---
 
-## Quick start (development)
+## Running the complete project, step by step
 
-Requirements: **Node ≥ 20.11**, **npm ≥ 10**. No MongoDB or Redis needed for local development —
-the backend ships an embedded driver that persists to `backend/.runtime/`.
+Everything runs locally with **Node ≥ 20.11** and **npm ≥ 10** — no MongoDB or Redis: the
+backend ships an embedded driver that persists to `backend/.runtime/`.
+
+The order matters: **install → build shared → seed → start the API → start the clients**.
+The seed must run *before* the API starts (see step 3).
+
+### Step 1 — Install
 
 ```bash
 git clone <repo> && cd colonize
-npm install                      # installs all workspaces
-
-cd backend
-npm run dev                      # API on http://localhost:4000
+npm install
 ```
 
-Then open:
+Installs every workspace in one go: `packages/shared`, `backend`, and all four apps.
 
-- **Swagger UI** → http://localhost:4000/docs/
-- **OpenAPI 3.1 JSON** → http://localhost:4000/docs/openapi.json
-- **Health** → `GET /api/health` (liveness) · `GET /api/health/ready` (readiness)
-- **Realtime** → Socket.IO namespace `/realtime`
-
-Seed the demo society (takes ~70s the first time; idempotent afterwards):
+### Step 2 — Build the shared package
 
 ```bash
-npm run seed                     # add --force to re-seed from scratch
+npm run build -w @colonize/shared
+```
+
+The seeder and the apps import the built `dist/`, so this must exist before steps 3–4.
+(`npm run dev -w backend` also rebuilds it via its `predev`, but the seed needs it first.)
+
+### Step 3 — Seed the demo society (BEFORE starting the API)
+
+```bash
+npm run seed -w backend              # ≈ 70 s the first time
+npm run seed -w backend -- --force   # wipe and re-seed from scratch
+```
+
+Creates the platform, **Green Valley Residency** (5 towers / 20 wings / 800 units / 1500
+residents / 50 staff / 10 vendors / 5 gates) and all demo accounts under `backend/.runtime/`.
+The seed is idempotent — it refuses to run on top of an existing society unless `--force` is
+given.
+
+> ⚠️ **Why before the API:** a running API keeps tenant database handles in memory; seeding
+> while it runs leaves it pointing at the old state, so logins fail with 401 until a restart.
+> If the API is already up, stop it, seed, then start it again.
+
+### Step 4 — Start the API
+
+```bash
+npm run dev -w backend               # API on http://localhost:4000
+```
+
+Verify it is alive:
+
+- **Health** → `GET /api/health` (liveness) · `GET /api/health/ready` (readiness)
+- **Swagger UI** → http://localhost:4000/docs/
+- **OpenAPI 3.1 JSON** → http://localhost:4000/docs/openapi.json
+- **Realtime** → Socket.IO namespace `/realtime`
+
+### Step 5 — Start the web consoles (optional, separate terminals)
+
+```bash
+npm run dev:admin                    # society office console  → http://localhost:5173
+npm run dev:super                    # platform console        → http://localhost:5174
+```
+
+Or run the API **and** both consoles in one terminal: `npm run dev` at the repo root.
+Both consoles proxy `/api` to the backend, so no CORS setup or environment variables are
+needed.
+
+### Step 6 — Start the mobile apps
+
+**Web preview (no device needed)** — run from the repo root:
+
+```bash
+npm run dev:resident                 # Expo dev server → open http://localhost:8081 in a browser
+npm run dev:security                 # second terminal; its web preview is on :8082
+```
+
+**Static export** (for hosting the web build):
+
+```bash
+npm run export:web -w @colonize/resident-mobile    # → apps/resident-mobile/dist
+npm run export:web -w @colonize/security-mobile    # → apps/security-mobile/dist
+```
+
+**On a device / simulator** — after `npm run dev:resident`, press `a` (Android), `i` (iOS)
+or `n` (Expo Go) in the Expo terminal.
+
+**API base URL** — each app resolves its backend in this order:
+
+1. the override stored in the app's secure store (the "API server" field on the login screen),
+2. `EXPO_PUBLIC_API_URL` from a `.env` file inside the app folder (inlined at bundle time),
+3. a platform default — Android emulator `http://10.0.2.2:4000/api`,
+   iOS simulator / web `http://localhost:4000/api`.
+
+The defaults work for local development out of the box. If the API runs on another host
+(e.g. a tablet on your LAN), create `apps/<app>/.env` with
+`EXPO_PUBLIC_API_URL=http://<host>:4000/api` and restart the app.
+
+### Step 7 — Log in and check each surface
+
+Use the [demo logins](#demo-logins) below:
+
+- **Resident app** — dashboard (bills, complaints, bookings), pay a bill, raise a complaint,
+  book an amenity and pay the slot fee, pre-approve a visitor and share the QR pass.
+- **Security app** — log into a shift at a gate, approve/decline the visitor queue, scan
+  entry/exit QR passes, watch the on-duty board.
+- **Society console (admin-web)** — full office surface: structure, residents, billing,
+  helpdesk, amenities, vendors, staff.
+- **Platform console (super-admin-web)** — the SaaS control plane: societies, subscriptions,
+  plans.
+
+### Step 8 — Run the test suites
+
+With the API running (steps 3–4 done):
+
+```bash
+npm test -w backend                                  # vitest: 15 files / 370 tests
+npm run e2e -w backend                               # §80 acceptance scenario: 117/117 checks
+node backend/scripts/mobile-contract-check.mjs       # every endpoint the mobile apps call
+npm run typecheck                                    # tsc --noEmit across all workspaces
 ```
 
 ---
@@ -115,24 +210,25 @@ All routes are mounted under the `/api` prefix and documented in OpenAPI 3.1.
 | Group | Paths | What it does |
 | --- | --- | --- |
 | `/auth` | 16 | OTP, password login, refresh, logout, platform (super-admin) login |
-| `/platform` | 11 | Super-admin: societies, onboarding, subscriptions, plans, tenants |
-| `/visitors` | 11 | Visitor pre-approval, passes, QR, history |
+| `/platform` | 12 | Super-admin: societies, onboarding, subscriptions, plans, tenants |
+| `/society` | 6 | Society profile/plan/counters, audit trail, module entitlements, roles, rule settings |
+| `/visitors` | 11 | Visitor pre-approval, passes, QR, queue decisions, history |
 | `/gate` | 4 | **Gate console**: `POST /gate/scan`, `GET /gate/queue` |
-| `/guards` | 5 | Guard shifts, patrols, guard console |
+| `/guards` | 5 | Guard roster (staff CRUD scoped to `type:'SECURITY'`), shift login/logout, on-duty, `GET /guards/dashboard` |
+| `/gates` | 2 | Gate/lane configuration + assignments (`/gates/dashboard` mirrors `/guards/dashboard`) |
 | `/bills` | 9 | Bill generation, resident `GET /bills/mine`, invoice PDF |
 | `/payments` | 9 | Payment intent → verify → receipt PDF, resident history |
 | `/accounting` | 7 | Journal entries, ledger, trial balance |
 | `/incomes`, `/expenses` | 4 | Income and expense records |
 | `/complaints` | 8 | Complaints, assignment, status transitions, comments, verification |
-| `/work-orders`, `/service-requests` | 4 | Vendor work orders and resident service requests |
-| `/vendors`, `/staff` | 4 | Vendor and staff directory |
-| `/amenities` | 2 | Amenity catalogue + `GET /amenities/:id/availability?date=YYYY-MM-DD` |
-| `/amenity-bookings` | 8 | Booking, payment linkage, entry QR |
+| `/work-orders`, `/service-requests` | 7 | Vendor work orders and resident service requests |
+| `/vendors`, `/staff` | 5 | Vendor and staff directory |
+| `/amenities` | 5 | Amenity catalogue, slots + `GET /amenities/:id/availability?date=YYYY-MM-DD` |
+| `/amenity-bookings` | 10 | Booking, payment linkage, calendar, entry QR, check-in/out |
 | `/structure` | 5 | `GET /structure/tree`, `/structure/counts` |
 | `/buildings`, `/wings`, `/floors`, `/units` | 9 | Hierarchy CRUD |
 | `/residents`, `/unit-members`, `/family-members` | 6 | People CRUD |
 | `/vehicles`, `/parking-areas`, `/parking-slots` | 8 | Vehicles and parking allocation |
-| `/gates` | 2 | Gate/lane configuration |
 | `/whoami` | 1 | Session context: user, society, membership, permissions, enabled modules, client hints |
 | `/meta`, `/health`, `/webhooks` | 4 | Metadata, health probes, payment gateway webhooks |
 
@@ -255,9 +351,11 @@ colonize/
 │   │   ├── docs/            openapi.ts, swagger.ts
 │   │   ├── app.ts, server.ts
 │   ├── scripts/e2e-acceptance.mjs     ← the §80 acceptance suite
+│   ├── scripts/mobile-contract-check.mjs  ← endpoint contract check for the mobile apps
 │   └── tests/                         unit / integration / e2e (vitest)
 ├── packages/shared/         shared types, enums, PLAN_TIERS, DEFAULT_TIER_MODULES
-├── apps/                    admin-web, super-admin-web, resident-mobile, security-mobile
+├── apps/                    admin-web, super-admin-web (React + Vite) ·
+│                            resident-mobile, security-mobile (Expo)
 ├── docker/                  Dockerfile, docker-compose.yml
 ├── .dockerignore
 └── package.json             npm workspaces: packages/*, backend, apps/*
@@ -269,6 +367,9 @@ colonize/
 npm run dev -w backend          # API with tsx watch
 npm run seed -w backend         # seed / re-seed Green Valley Residency
 npm run e2e -w backend          # §80 acceptance suite (117 checks)
+npm run dev:admin / dev:super   # web consoles (Vite dev servers)
+npm run dev:resident            # resident app (Expo) — web / Android / iOS
+npm run dev:security            # security app (Expo) — web / Android / iOS
 npm run build                   # shared → backend → web apps
 npm run typecheck               # tsc --noEmit across all workspaces
 npm run test -w backend         # vitest
