@@ -151,6 +151,73 @@ npm run typecheck                                    # tsc --noEmit across all w
 
 ---
 
+## Building the mobile apps for Android and iOS
+
+Both mobile apps (`apps/resident-mobile`, `apps/security-mobile`) are Expo SDK 54 /
+React Native 0.81.6 (new architecture) and are production-ready for both stores.
+They share one backend; the production API URL is injected at build time via
+`EXPO_PUBLIC_API_URL` (see [eas.json](#build-profiles)).
+
+**Store identity**
+
+| App | Bundle id / package | Scheme | Notes |
+| --- | --- | --- | --- |
+| Colonize Resident | `com.colonize.resident` | `colonize-resident` | light theme, no camera |
+| Colonize Security | `com.colonize.security` | `colonize-security` | dark theme, camera (QR scan) — `CAMERA` / `NSCameraUsageDescription` declared |
+
+Each app ships its own 1024×1024 icon, Android adaptive icon, splash and favicon
+(`apps/<app>/assets/`), and an `eas.json` with three build profiles:
+
+| Profile | What it is | `EXPO_PUBLIC_API_URL` |
+| --- | --- | --- |
+| `development` | Dev client, internal, Android APK | *unset* — the platform default (emulator/host `:4000`) |
+| `preview` | Internal distribution (QA on real devices), Android APK | placeholder — set to your staging API |
+| `production` | Store build, `autoIncrement` (bumps `android.versionCode` / `ios.buildNumber`) | placeholder — set to your production API |
+
+> Replace `https://api.colonize.example.com/api` in each app's `eas.json`
+> `preview`/`production` profiles (or use `eas secret` / `eas env`) with the URL of your
+> deployed API before building. The bundle ids assume the `com.colonize` domain is
+> registered to you; change them in `app.json` before first store submission if not.
+
+**Local development on a device / simulator**
+
+```bash
+npm run dev:resident          # or dev:security
+# then in the Expo terminal:  a = Android,  i = iOS,  n = Expo Go
+
+# or compile the native project yourself (no EAS):
+cd apps/resident-mobile
+npx expo run:android          # builds + installs on a connected device/emulator
+npx expo run:ios              # macOS only
+```
+
+**Production builds (EAS)**
+
+```bash
+npm i -g eas-cli && eas login
+
+# store-ready APK / AAB + IPA
+eas build -p android --profile production --non-interactive   # apps/resident-mobile
+eas build -p ios     --profile production --non-interactive
+eas build -p all     --profile preview                          # quick QA on TestFlight / Play internal track
+
+# store submission
+eas submit -p android --profile production
+eas submit -p ios     --profile production
+```
+
+Run `eas init` (or `eas link`) inside each app folder first so the EAS project id is
+recorded; keep the Android keystore and iOS signing certs in EAS (`eas credentials`).
+Native projects are generated at build time (EAS managed workflow) — the `android/` and
+`ios/` folders in each app are git-ignored.
+
+**Verified** — `expo prebuild` generates clean Android (Gradle) and iOS (Xcode) projects
+for both apps: bundle ids, deep-link schemes, adaptive icons, camera permission + usage
+string, and the dark/light launch themes all land in the native manifests. `expo-doctor`
+passes all local checks (the two remote metadata checks need network access to Expo's API).
+
+---
+
 ## Demo logins
 
 Produced by the seed. All credentials come from `SEED_*` environment variables — nothing is
@@ -355,7 +422,8 @@ colonize/
 │   └── tests/                         unit / integration / e2e (vitest)
 ├── packages/shared/         shared types, enums, PLAN_TIERS, DEFAULT_TIER_MODULES
 ├── apps/                    admin-web, super-admin-web (React + Vite) ·
-│                            resident-mobile, security-mobile (Expo)
+│                            resident-mobile, security-mobile (Expo 54: app.json,
+│                            eas.json, assets/ — store icons, splash, adaptive icons)
 ├── docker/                  Dockerfile, docker-compose.yml
 ├── .dockerignore
 └── package.json             npm workspaces: packages/*, backend, apps/*

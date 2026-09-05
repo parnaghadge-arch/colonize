@@ -5,3 +5,7 @@ web-build/
 *.tsbuildinfo
 .env
 .env.*
+
+# generated native projects (EAS managed workflow — never commit)
+android/
+ios/

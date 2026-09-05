@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Super Admin Panel — the SaaS control plane: societies, onboarding, plans, subscriptions and platform health (§79). React + Vite.",
+  "description": "Super Admin Panel \u2014 the SaaS control plane: societies, onboarding, plans, subscriptions and platform health (\u00a779). React + Vite.",
   "scripts": {
     "dev": "vite",
     "build": "tsc -p tsconfig.json --noEmit && vite build",
@@ -13,8 +13,8 @@
   },
   "dependencies": {
     "@colonize/shared": "*",
-    "react": "^19.2.0",
-    "react-dom": "^19.2.0",
+    "react": "~19.1.4",
+    "react-dom": "~19.1.4",
     "react-router-dom": "^7.18.0"
   },
   "devDependencies": {

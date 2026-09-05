@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Society Management Web App — the console a society's admin, committee and manager use (§78). React + Vite.",
+  "description": "Society Management Web App \u2014 the console a society's admin, committee and manager use (\u00a778). React + Vite.",
   "scripts": {
     "dev": "vite",
     "build": "tsc -p tsconfig.json --noEmit && vite build",
@@ -13,8 +13,8 @@
   },
   "dependencies": {
     "@colonize/shared": "*",
-    "react": "^19.2.0",
-    "react-dom": "^19.2.0",
+    "react": "~19.1.4",
+    "react-dom": "~19.1.4",
     "react-router-dom": "^7.18.0"
   },
   "devDependencies": {

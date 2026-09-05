@@ -6,21 +6,33 @@
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
-    "backgroundColor": "#0f172a",
+    "backgroundColor": "#f5f6f8",
+    "scheme": "colonize-resident",
+    "icon": "./assets/icon.png",
+    "favicon": "./assets/favicon.png",
     "splash": {
-      "backgroundColor": "#0f172a",
-      "resizeMode": "contain"
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#f5f6f8"
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "local.colonize.resident"
+      "bundleIdentifier": "com.colonize.resident",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
-      "package": "local.colonize.resident",
-      "edgeToEdgeEnabled": true
+      "package": "com.colonize.resident",
+      "edgeToEdgeEnabled": true,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#1f6feb"
+      }
     },
     "web": {
-      "bundler": "metro"
+      "bundler": "metro",
+      "favicon": "./assets/favicon.png"
     },
     "plugins": [
       "expo-secure-store"
