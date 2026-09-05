@@ -2,7 +2,7 @@
   "name": "@colonize/backend",
   "version": "1.0.0",
   "private": true,
-  "description": "Colonize platform API — multi-tenant (database-per-society) Node.js + Express + MongoDB REST API with RBAC, real-time events, notifications, payments, accounting and reporting.",
+  "description": "Colonize platform API \u2014 multi-tenant (database-per-society) Node.js + Express + MongoDB REST API with RBAC, real-time events, notifications, payments, accounting and reporting.",
   "type": "module",
   "main": "dist/server.js",
   "scripts": {
@@ -20,6 +20,7 @@
     "db:provision": "tsx src/db/scripts/provisionSociety.ts",
     "clean": "rm -rf dist *.tsbuildinfo",
     "e2e": "node scripts/e2e-acceptance.mjs",
+    "contract": "node scripts/mobile-contract-check.mjs",
     "test:coverage": "vitest run --coverage",
     "db:repair-labels": "tsx src/db/scripts/repairUnitLabels.ts"
   },

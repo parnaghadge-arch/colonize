@@ -29,6 +29,27 @@ async function call(method, path, { token, societyId, body, query } = {}) {
 const today = new Date().toISOString().slice(0, 10);
 const plus2 = new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10);
 
+/**
+ * A QR pass is valid for [expectedArrival, expectedArrival + 12h], read on the society's wall
+ * clock (Asia/Kolkata). Anchor the arrival a couple of hours ahead of the current IST time so
+ * the pass window is open no matter what hour the contract runs (CI schedules are UTC-based).
+ */
+function arrivalAhead(hours = 2) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(new Date());
+  const get = (t) => parts.find((p) => p.type === t)?.value ?? '';
+  const base = new Date(`${get('year')}-${get('month')}-${get('day')}T00:00:00Z`);
+  const totalMin = Number(get('hour')) * 60 + Number(get('minute')) + hours * 60;
+  base.setUTCDate(base.getUTCDate() + Math.floor(totalMin / 1440));
+  const norm = ((totalMin % 1440) + 1440) % 1440;
+  const hh = String(Math.floor(norm / 60)).padStart(2, '0');
+  const mm = String(norm % 60).padStart(2, '0');
+  return { visitDate: base.toISOString().slice(0, 10), hhmm: `${hh}:${mm}` };
+}
+
 async function main() {
   console.log('== resident app: auth ==');
   const login = await call('POST', '/auth/login', { body: { identifier: '+919800000101', password: 'Resident@123' } });
@@ -46,6 +67,18 @@ async function main() {
   // Admin (society office) — used to generate a bill so the payment flow is exercised.
   const aLogin = await call('POST', '/auth/login', { body: { identifier: 'admin@greenvalley.local', password: 'GreenValley@1' } });
   const adminToken = aLogin.json?.data?.accessToken;
+
+  // The demo society bans gate entry 22:00–06:00 IST, and manual check-in enforces that against
+  // the wall clock — so a run at the wrong hour would 400 for reasons the contract must not
+  // depend on. Lift the night ban for the duration of the run, then restore the original value.
+  let restoreNightEntry;
+  const settings0 = await call('GET', '/society/settings', { token: adminToken, societyId });
+  const nightEntryWas = settings0.json?.data?.values?.visitor?.allowNightEntry;
+  if (nightEntryWas !== true) {
+    const flip = await call('PUT', '/society/settings/visitor', { token: adminToken, societyId, body: { value: { allowNightEntry: true } } });
+    if (flip.status === 200) restoreNightEntry = nightEntryWas ?? false;
+  }
+  try {
 
   console.log('== resident app: dashboard feeds ==');
   const bills = await call('GET', '/bills/mine', { token: rToken, societyId, query: { limit: 12 } });
@@ -165,10 +198,11 @@ async function main() {
   }
 
   console.log('== resident app: visitors + QR pass ==');
+  const arr1 = arrivalAhead(2);
   const pre = await call('POST', '/visitors/pre-approve', {
     token: rToken, societyId,
     body: {
-      visitorName: 'Mobile Contract Guest', visitDate: today, expectedArrival: '10:30', purpose: 'Contract verification',
+      visitorName: 'Mobile Contract Guest', visitDate: arr1.visitDate, expectedArrival: arr1.hhmm, purpose: 'Contract verification',
       visitorType: 'GUEST', numberOfVisitors: 1, generateQrPass: true,
     },
   });
@@ -199,18 +233,12 @@ async function main() {
   const queue = await call('GET', '/gate/queue', { token: gToken, societyId: gSociety, query: { gateId } });
   const q = queue.json?.data;
   check('gate queue shape', queue.status === 200 && Array.isArray(q?.awaitingApproval) && Array.isArray(q?.inside) && q?.counts, `status=${queue.status} ${JSON.stringify(q?.counts ?? {})}`);
-  const awaiting = (q?.awaitingApproval ?? [])[0];
-  if (awaiting) {
-    const decide = await call('POST', `/visitors/${awaiting.id}/decide`, { token: gToken, societyId: gSociety, body: { decision: 'APPROVE' } });
-    check('decide approve', [200, 201].includes(decide.status), `status=${decide.status} ${JSON.stringify(decide.json?.data ?? {})?.slice(0, 150)}`);
-  } else {
-    // use the resident-created pre-approved visitor instead
-    const approve = await call('POST', `/visitors/${visitorId}/decide`, { token: gToken, societyId: gSociety, body: { decision: 'APPROVE' } });
-    check('decide approve (resident visitor)', [200, 201].includes(approve.status), `status=${approve.status} ${JSON.stringify(approve.json?.data ?? {})?.slice(0, 150)}`);
-  }
+  // Approve the visitor this run just created — deterministic regardless of leftovers in the queue.
+  const decide = await call('POST', `/visitors/${visitorId}/decide`, { token: gToken, societyId: gSociety, body: { decision: 'APPROVE' } });
+  check('decide approve', [200, 201].includes(decide.status), `status=${decide.status} ${JSON.stringify(decide.json?.data ?? {})?.slice(0, 150)}`);
 
   const queue2 = await call('GET', '/gate/queue', { token: gToken, societyId: gSociety, query: { gateId } });
-  const approved = (queue2.json?.data?.approvedNotEntered ?? [])[0];
+  const approved = (queue2.json?.data?.approvedNotEntered ?? []).find((v) => v.id === visitorId);
   if (approved) {
     const checkIn = await call('POST', `/visitors/${approved.id}/check-in`, { token: gToken, societyId: gSociety, body: { gateId } });
     check('manual check-in', [200, 201].includes(checkIn.status) && checkIn.json?.data?.entry, `status=${checkIn.status} ${JSON.stringify(checkIn.json?.data ?? {})?.slice(0, 150)}`);
@@ -230,9 +258,12 @@ async function main() {
     (scanBad.status >= 400 && Boolean(scanBad.json?.message));
   check('scan invalid rejected', badRejected, `status=${scanBad.status} ${JSON.stringify(scanBad.json ?? {})?.slice(0, 150)}`);
   // A fresh pass for the valid scan (the queue flow above may already have consumed the first one).
+  // Its window must already be OPEN — scan rejects passes that start in the future (425) — so
+  // the arrival is an hour in the past (the window then runs until 11h from now).
+  const arr2 = arrivalAhead(-1);
   const scanPre = await call('POST', '/visitors/pre-approve', {
     token: rToken, societyId,
-    body: { visitorName: 'Mobile Contract Scanner', visitDate: today, expectedArrival: '11:00', purpose: 'QR scan contract check', visitorType: 'GUEST', generateQrPass: true },
+    body: { visitorName: 'Mobile Contract Scanner', visitDate: arr2.visitDate, expectedArrival: arr2.hhmm, purpose: 'QR scan contract check', visitorType: 'GUEST', generateQrPass: true },
   });
   const scanVisitorId = scanPre.json?.data?.visitor?._id;
   const rescan = scanVisitorId
@@ -257,6 +288,12 @@ async function main() {
   check('security dashboard', board.status === 200 && Array.isArray(b?.gates) && Array.isArray(b?.guardsOnDuty) && Array.isArray(b?.hourly) && b?.queue, `status=${board.status} gates=${b?.gates?.length} duty=${b?.guardsOnDuty?.length}`);
   const endShift = await call('POST', '/guards/shift/logout', { token: gToken, societyId: gSociety, body: {} });
   check('guard shift logout', endShift.status === 200, `status=${endShift.status} ${JSON.stringify(endShift.json?.data ?? {})?.slice(0, 120)}`);
+
+  } finally {
+    if (restoreNightEntry !== undefined) {
+      await call('PUT', '/society/settings/visitor', { token: adminToken, societyId, body: { value: { allowNightEntry: restoreNightEntry } } });
+    }
+  }
 
   console.log(`\n${pass} passed, ${fail} failed`);
   if (failures.length) console.log('failures:\n  - ' + failures.join('\n  - '));

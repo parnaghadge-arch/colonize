@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# The embedded database driver means CI needs no MongoDB or Redis: it seeds into
+# backend/.runtime exactly like a developer's machine does.
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build shared package
+        run: npm run build -w @colonize/shared
+
+      - name: Typecheck all workspaces (web + mobile + backend)
+        run: npm run typecheck
+
+      - name: Unit + integration tests (vitest)
+        run: npm test -w backend
+
+      - name: Seed the demo society
+        run: npm run seed -w backend
+
+      - name: Start the API (background)
+        working-directory: backend
+        run: nohup npx tsx src/server.ts > ../api.log 2>&1 &
+
+      - name: Wait for API readiness
+        run: |
+          for i in $(seq 1 45); do
+            if curl -sf http://localhost:4000/api/health/ready > /dev/null; then exit 0; fi
+            sleep 2
+          done
+          echo "API never became ready:"
+          cat api.log
+          exit 1
+
+      - name: §80 acceptance suite (117 checks)
+        run: npm run e2e -w backend
+
+      - name: Mobile app endpoint contract check
+        run: npm run contract -w backend
+
+      - name: Stop the API
+        if: always()
+        run: pkill -f "src/server.ts" || true

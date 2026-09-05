@@ -404,6 +404,7 @@ function validationSchemas(): Record<string, JsonSchema> {
     ['ScanQrInput', V.scanQrSchema],
     ['CreateGateInput', V.createGateSchema],
     ['GuardShiftLoginInput', V.guardShiftLoginSchema],
+    ['GuardAssignmentInput', V.createGuardAssignmentSchema],
     ['CreateComplaintInput', V.createComplaintSchema],
     ['AssignComplaintInput', V.assignComplaintSchema],
     ['ComplaintStatusChangeInput', V.complaintStatusChangeSchema],
@@ -745,8 +746,48 @@ export function buildOpenApiDocument(): Record<string, unknown> {
         post: op({ tag: 'Residents', summary: 'Assign a slot to a unit or vehicle', operationId: 'assignParkingSlot', params: [ID_PARAM], body: ref('AssignParkingSlotInput'),
           responses: { 200: okJson(envelope(ref('ParkingSlot')), 'Assigned'), ...STANDARD_ERRORS } }),
       },
+      '/api/parking-slots/{id}/release': {
+        post: op({ tag: 'Residents', summary: 'Release a slot back to the pool', operationId: 'releaseParkingSlot', params: [ID_PARAM],
+          responses: { 200: okJson(envelope(ref('ParkingSlot')), 'Slot released'), ...STANDARD_ERRORS } }),
+      },
     },
   }));
+  paths['/api/residents/my-unit'] = {
+    get: op({ tag: 'Residents', summary: "The signed-in resident's own unit view", operationId: 'myUnit',
+      description: 'Unit, building and wing labels, every person on the unit (with their permissions), vehicles and parking slots — in one call, for the resident app profile screen.',
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Unit view'), ...STANDARD_ERRORS } }),
+  };
+  paths['/api/residents/import'] = {
+    post: op({ tag: 'Residents', summary: 'Bulk-import residents from CSV', operationId: 'importResidents',
+      description: 'The admin uploads the society\'s resident sheet — as `csv` in the body or as a multipart file — each row is validated against the create schema and imported in a transaction. `dryRun` previews without writing.',
+      body: { type: 'object', properties: { csv: { type: 'string', description: 'CSV text (omit when sending a multipart file part)' }, dryRun: { type: 'boolean', default: false } } },
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Import report'), ...STANDARD_ERRORS } }),
+  };
+  paths['/api/residents/import/template'] = {
+    get: op({ tag: 'Residents', summary: 'CSV import template — columns, accepted aliases and an example row', operationId: 'residentsImportTemplate',
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Import template fetched'), ...STANDARD_ERRORS } }),
+  };
+  paths['/api/residents/{id}/move-out'] = {
+    post: op({ tag: 'Residents', summary: 'Move a resident out of their unit', operationId: 'residentMoveOut', params: [ID_PARAM],
+      body: { type: 'object', properties: { moveOutDate: { type: 'string' }, reason: { type: 'string' }, deactivateLogin: { type: 'boolean', default: true } } },
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Moved out'), ...STANDARD_ERRORS } }),
+  };
+  paths['/api/residents/{id}/transfer'] = {
+    post: op({ tag: 'Residents', summary: 'Transfer a resident to a different unit', operationId: 'transferResident', params: [ID_PARAM],
+      body: { type: 'object', properties: { toUnitId: { type: 'string' }, moveDate: { type: 'string' }, kind: { type: 'string', enum: ['OWNER', 'TENANT', 'FAMILY', 'COMPANY_GUEST'] } }, required: ['toUnitId'] },
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Resident transferred to the new unit'), ...STANDARD_ERRORS } }),
+  };
+  paths['/api/family-members/{id}/permissions'] = {
+    post: op({ tag: 'Residents', summary: 'Update a family member\'s unit permissions', operationId: 'setFamilyPermissions', params: [ID_PARAM],
+      description: 'Only the members of the same unit may change permissions, and the change is applied server-side from the saved object — never from a later client claim.',
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Permissions updated'), ...STANDARD_ERRORS } }),
+  };
+  paths['/api/vehicles/verify/{number}'] = {
+    get: op({ tag: 'Residents', summary: 'Gate plate lookup — whose unit does this vehicle belong to?', operationId: 'verifyVehicle',
+      params: [{ name: 'number', in: 'path', required: true, schema: { type: 'string' }, description: 'Vehicle registration number' }],
+      description: 'The guard types a plate and sees the owner, unit and vehicle status.',
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Vehicle verification'), ...STANDARD_ERRORS } }),
+  };
 
   // ── Visitors & gate console ────────────────────────────────────────────
   const Vb = '/api/visitors';
@@ -837,6 +878,26 @@ export function buildOpenApiDocument(): Record<string, unknown> {
     post: op({ tag: 'Gate Console', summary: 'Record a manual exit', operationId: 'recordExit', body: ref('RecordExitInput'),
       responses: { 201: okJson(envelope({ type: 'object', additionalProperties: true }), 'Exit logged'), ...STANDARD_ERRORS } }),
   };
+  paths['/api/visitors/entries/log'] = {
+    get: op({ tag: 'Visitors', summary: 'Gate entry/exit log', operationId: 'visitorEntryLog', params: LIST_PARAMS,
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Entry log'), ...STANDARD_ERRORS } }),
+  };
+  paths['/api/visitors/{id}/cancel'] = {
+    post: op({ tag: 'Visitors', summary: 'Cancel a pending or upcoming visit', operationId: 'cancelVisitor', params: [ID_PARAM],
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Visit cancelled'), ...STANDARD_ERRORS } }),
+  };
+  paths['/api/visitors/{id}/recurring-pass'] = {
+    post: op({ tag: 'Visitors', summary: 'Convert a visit into a recurring pass (service staff)', operationId: 'recurringPass', params: [ID_PARAM],
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Recurring pass issued'), ...STANDARD_ERRORS } }),
+  };
+  paths['/api/visitors/{id}/revoke-pass'] = {
+    post: op({ tag: 'Visitors', summary: 'Revoke the visitor\'s QR pass', operationId: 'revokePass', params: [ID_PARAM],
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Pass revoked'), ...STANDARD_ERRORS } }),
+  };
+  paths['/api/visitors/expire-stale'] = {
+    post: op({ tag: 'Visitors', summary: 'Auto-expire stale visits (scheduled sweep)', operationId: 'expireStaleVisitors',
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Stale visits expired'), ...STANDARD_ERRORS } }),
+  };
 
   // ── Gates & guards ─────────────────────────────────────────────────────
   Object.assign(paths, crudPaths({ base: '/api/gates', tag: 'Security', label: 'Gate', create: V.createGateSchema, update: V.updateGateSchema }));
@@ -852,6 +913,44 @@ export function buildOpenApiDocument(): Record<string, unknown> {
   paths['/api/guards/dashboard'] = {
     get: op({ tag: 'Security', summary: 'Guard console dashboard', operationId: 'guardDashboard',
       responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Queue, pending approvals and shift state'), ...STANDARD_ERRORS } }),
+  };
+  paths['/api/gates/dashboard'] = {
+    get: op({ tag: 'Security', summary: 'Guard console dashboard (alias of `/api/guards/dashboard`)', operationId: 'guardDashboardCompat',
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Queue, pending approvals and shift state'), ...STANDARD_ERRORS } }),
+  };
+  paths['/api/gates/my'] = {
+    get: op({ tag: 'Security', summary: 'The gate the signed-in guard is posted at', operationId: 'myGate',
+      description: 'Resolved server-side from an active guard assignment or an open shift log — never from a client-supplied header, so a guard cannot record entries at an unposted gate.',
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Posted gate'), ...STANDARD_ERRORS } }),
+  };
+  paths['/api/gates/{id}/assign'] = {
+    post: op({ tag: 'Security', summary: 'Post a guard at this gate', operationId: 'assignGuardToGate', params: [ID_PARAM], body: ref('GuardAssignmentInput'),
+      description: 'One active posting per guard per shift — re-assigning replaces the old posting instead of leaving two "current" gates for the same person.',
+      responses: { 201: okJson(envelope({ type: 'object', additionalProperties: true }), 'Guard posted'), ...STANDARD_ERRORS } }),
+  };
+  paths['/api/gates/{id}/assignments'] = {
+    get: op({ tag: 'Security', summary: 'Active postings at this gate', operationId: 'gateAssignments', params: [ID_PARAM],
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Gate posting fetched'), ...STANDARD_ERRORS } }),
+  };
+  paths['/api/guards/shift/current'] = {
+    get: op({ tag: 'Security', summary: 'The signed-in guard\'s open shift', operationId: 'guardShiftCurrent',
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'On-duty state and gate'), ...STANDARD_ERRORS } }),
+  };
+  paths['/api/guards/on-duty'] = {
+    get: op({ tag: 'Security', summary: 'Attendance roster — who is on duty right now', operationId: 'guardsOnDuty',
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'On-duty guards'), ...STANDARD_ERRORS } }),
+  };
+  paths['/api/guards/assignments'] = {
+    get: op({ tag: 'Security', summary: 'Guard gate postings', operationId: 'guardAssignments',
+      params: [
+        { name: 'gateId', in: 'query', schema: { type: 'string' } },
+        { name: 'isActive', in: 'query', schema: { type: 'boolean', default: true } },
+      ],
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Postings'), ...STANDARD_ERRORS } }),
+  };
+  paths['/api/guards/assignments/{id}'] = {
+    delete: op({ tag: 'Security', summary: 'End a guard posting', operationId: 'deleteGuardAssignment', params: [ID_PARAM],
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Posting ended'), ...STANDARD_ERRORS } }),
   };
 
   // ── Helpdesk ───────────────────────────────────────────────────────────
@@ -889,6 +988,29 @@ export function buildOpenApiDocument(): Record<string, unknown> {
     get: op({ tag: 'Helpdesk', summary: 'List the conversation', operationId: 'listComplaintComments', params: [ID_PARAM],
       responses: { 200: okJson(envelope({ type: 'array', items: { type: 'object', additionalProperties: true } }), 'Comments'), ...STANDARD_ERRORS } }),
   };
+  paths[`${C}/categories`] = {
+    get: op({ tag: 'Helpdesk', summary: 'Categories the society handles, with the SLA promised per priority', operationId: 'complaintCategories',
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Categories'), ...STANDARD_ERRORS } }),
+  };
+  paths[`${C}/stats`] = {
+    get: op({ tag: 'Helpdesk', summary: 'Complaint volume and SLA stats', operationId: 'complaintStats',
+      params: [{ name: 'days', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 365, default: 30 } }],
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Stats'), ...STANDARD_ERRORS } }),
+  };
+  paths[`${C}/{id}/close`] = {
+    post: op({ tag: 'Helpdesk', summary: 'Close a complaint (committee/office)', operationId: 'closeComplaint', params: [ID_PARAM],
+      description: 'The administrative close — distinct from resident verification. `force` skips the "must be verified by the raiser" rule.',
+      body: { type: 'object', properties: { resolutionSummary: { type: 'string' }, force: { type: 'boolean', default: false } } },
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Complaint closed'), ...STANDARD_ERRORS } }),
+  };
+  paths[`${C}/sla-sweep`] = {
+    post: op({ tag: 'Helpdesk', summary: 'Mark complaints that breached their SLA (scheduled sweep)', operationId: 'complaintSlaSweep',
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'SLA sweep complete'), ...STANDARD_ERRORS } }),
+  };
+  // The route is mounted for both verbs; document the POST alias next to the PATCH.
+  paths[`${C}/{id}/status`].post = op({ tag: 'Helpdesk', summary: 'Move a complaint through its lifecycle (POST alias of PATCH)', operationId: 'setComplaintStatusPost', params: [ID_PARAM],
+    body: ref('ComplaintStatusChangeInput'),
+    responses: { 200: okJson(envelope(ref('Complaint')), 'Status changed'), ...STANDARD_ERRORS } }),
   Object.assign(paths, crudPaths({ base: '/api/work-orders', tag: 'Helpdesk', label: 'WorkOrder', create: V.createWorkOrderSchema, update: V.updateWorkOrderSchema }));
   const W = '/api/work-orders';
   paths[`${W}/my`] = {
@@ -1106,6 +1228,27 @@ export function buildOpenApiDocument(): Record<string, unknown> {
       body: { type: 'object', properties: { reason: { type: 'string' } }, required: ['reason'] },
       responses: { 200: okJson(envelope(ref('Bill')), 'Disputed'), ...STANDARD_ERRORS } }),
   };
+  paths[`${Bi}/settings`] = {
+    get: op({ tag: 'Finance', summary: 'The society\'s billing configuration (heads, tax, grace, late fees)', operationId: 'billingSettings',
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Billing settings'), ...STANDARD_ERRORS } }),
+  };
+  paths[`${Bi}/{id}/invoice.pdf`] = {
+    get: op({ tag: 'Finance', summary: 'Download the tax invoice PDF', operationId: 'billInvoicePdf', params: [ID_PARAM],
+      responses: { 200: { description: 'Invoice PDF', content: { 'application/pdf': { schema: { type: 'string', format: 'binary' } } } }, ...STANDARD_ERRORS } }),
+  };
+  paths[`${Bi}/{id}/send`] = {
+    post: op({ tag: 'Finance', summary: 'Send (or re-send) a bill to the household', operationId: 'sendBill', params: [ID_PARAM],
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Bill sent'), ...STANDARD_ERRORS } }),
+  };
+  paths[`${Bi}/late-fees`] = {
+    post: op({ tag: 'Finance', summary: 'Apply the society\'s late fee to everything past its grace period', operationId: 'applyLateFees',
+      body: { type: 'object', properties: { period: { type: 'string', pattern: '^\\d{4}-\\d{2}$' } } },
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Late fees applied'), ...STANDARD_ERRORS } }),
+  };
+  paths[`${Bi}/reminders`] = {
+    post: op({ tag: 'Finance', summary: 'Send due/overdue bill reminders to residents', operationId: 'sendBillReminders',
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Reminders sent'), ...STANDARD_ERRORS } }),
+  };
 
   const Py = '/api/payments';
   paths[`${Py}/intent`] = {
@@ -1158,6 +1301,10 @@ export function buildOpenApiDocument(): Record<string, unknown> {
     get: op({ tag: 'Finance', summary: 'Download the receipt PDF', operationId: 'paymentReceipt', params: [ID_PARAM],
       responses: { 200: { description: 'Receipt PDF', content: { 'application/pdf': { schema: { type: 'string', format: 'binary' } } } }, ...STANDARD_ERRORS } }),
   };
+  paths[`${Py}/{id}/receipt.pdf`] = {
+    get: op({ tag: 'Finance', summary: 'Download the receipt PDF (alias)', operationId: 'paymentReceiptPdf', params: [ID_PARAM],
+      responses: { 200: { description: 'Receipt PDF', content: { 'application/pdf': { schema: { type: 'string', format: 'binary' } } } }, ...STANDARD_ERRORS } }),
+  };
   Object.assign(paths, crudPaths({ base: Py, tag: 'Finance', label: 'Payment', allowCreate: false }));
 
   paths['/api/webhooks/payments'] = {
@@ -1195,7 +1342,21 @@ export function buildOpenApiDocument(): Record<string, unknown> {
   };
   Object.assign(paths, crudPaths({ base: `${Ac}/ledgers`, tag: 'Finance', label: 'Ledger', create: V.createLedgerSchema, update: V.updateLedgerSchema }));
   Object.assign(paths, crudPaths({ base: `${Ac}/journal-entries`, tag: 'Finance', label: 'JournalEntry', create: V.createJournalEntrySchema, allowCreate: true }));
+  paths[`${Ac}/journal-entries/{id}/reverse`] = {
+    post: op({ tag: 'Finance', summary: 'Reverse a journal entry with a correcting entry', operationId: 'reverseJournalEntry', params: [ID_PARAM],
+      body: { type: 'object', properties: { reason: { type: 'string', minLength: 5 } }, required: ['reason'] },
+      responses: { 201: okJson(envelope({ type: 'object', additionalProperties: true }), 'Journal entry reversed'), ...STANDARD_ERRORS } }),
+  };
+  paths[`${Ac}/rebuild-balances`] = {
+    post: op({ tag: 'Finance', summary: 'Rebuild ledger balances from the journal', operationId: 'rebuildBalances',
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Balances rebuilt'), ...STANDARD_ERRORS } }),
+  };
   Object.assign(paths, crudPaths({ base: '/api/expenses', tag: 'Finance', label: 'Expense', create: V.createExpenseSchema, update: V.createExpenseSchema.partial() }));
+  paths['/api/expenses/{id}/pay'] = {
+    post: op({ tag: 'Finance', summary: 'Settle an unpaid expense — moves it out of Sundry Creditors through Bank/Cash', operationId: 'payExpense', params: [ID_PARAM],
+      body: { type: 'object', properties: { paymentMode: { type: 'string' }, paidAt: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' } } },
+      responses: { 200: okJson(envelope(ref('Expense')), 'Expense marked as paid'), ...STANDARD_ERRORS } }),
+  };
   Object.assign(paths, crudPaths({ base: '/api/incomes', tag: 'Finance', label: 'Income', create: V.createIncomeSchema, update: V.createIncomeSchema.partial() }));
 
   // ── Society self-service ───────────────────────────────────────────────

@@ -16,14 +16,15 @@ No Next.js anywhere.
 | Area | State |
 | --- | --- |
 | `packages/shared` | ✅ Complete — shared types, enums, plan tiers, module keys |
-| `backend` | ✅ Complete — 153 OpenAPI paths, RBAC, tenant isolation, soft deletes, audit log, transactions |
+| `backend` | ✅ Complete — 187 OpenAPI paths (100% of implemented routes documented), RBAC, tenant isolation, soft deletes, audit log, transactions |
 | Seed data (Green Valley Residency) | ✅ Complete — 5 towers / 20 wings / 800 units / 1500 residents / 50 staff / 10 vendors / 5 gates |
 | §80 acceptance scenario | ✅ Verified end to end — `npm run e2e` → **117/117 checks, 11 scenario groups** |
 | Docker + production env | ✅ Complete — `docker/Dockerfile`, `docker/docker-compose.yml`, `.env.production` |
 | `apps/admin-web`, `apps/super-admin-web` | ✅ Complete — React + Vite consoles (society office / platform) |
 | `apps/resident-mobile`, `apps/security-mobile` | ✅ Complete — Expo (React Native) resident + guard apps |
 | Vitest unit / integration suites | ✅ Complete — 15 files / 370 tests (`npm test -w backend`) |
-| Mobile contract check | ✅ Complete — `node backend/scripts/mobile-contract-check.mjs` verifies every endpoint the mobile apps call |
+| Mobile contract check | ✅ Complete — `npm run contract -w backend` (36 checks) verifies every endpoint the mobile apps call, at any hour of the day |
+| CI (GitHub Actions) | ✅ Complete — `.github/workflows/ci.yml`: build → typecheck → unit tests → seed → live e2e → mobile contract on every push/PR |
 
 The backend is a fully working product surface — every endpoint listed in `/docs` is real, not stubbed.
 
@@ -279,23 +280,23 @@ All routes are mounted under the `/api` prefix and documented in OpenAPI 3.1.
 | `/auth` | 16 | OTP, password login, refresh, logout, platform (super-admin) login |
 | `/platform` | 12 | Super-admin: societies, onboarding, subscriptions, plans, tenants |
 | `/society` | 6 | Society profile/plan/counters, audit trail, module entitlements, roles, rule settings |
-| `/visitors` | 11 | Visitor pre-approval, passes, QR, queue decisions, history |
-| `/gate` | 4 | **Gate console**: `POST /gate/scan`, `GET /gate/queue` |
-| `/guards` | 5 | Guard roster (staff CRUD scoped to `type:'SECURITY'`), shift login/logout, on-duty, `GET /guards/dashboard` |
-| `/gates` | 2 | Gate/lane configuration + assignments (`/gates/dashboard` mirrors `/guards/dashboard`) |
-| `/bills` | 9 | Bill generation, resident `GET /bills/mine`, invoice PDF |
-| `/payments` | 9 | Payment intent → verify → receipt PDF, resident history |
-| `/accounting` | 7 | Journal entries, ledger, trial balance |
-| `/incomes`, `/expenses` | 4 | Income and expense records |
-| `/complaints` | 8 | Complaints, assignment, status transitions, comments, verification |
-| `/work-orders`, `/service-requests` | 7 | Vendor work orders and resident service requests |
+| `/visitors` | 16 | Pre-approval, at-gate entry, QR passes (issue/regenerate/revoke/recurring), decisions, manual check-in/out, gate queue, entries log, summary |
+| `/gate` | 4 | **Gate console**: `POST /gate/scan`, `GET /gate/queue`, exits, dashboard |
+| `/guards` | 9 | Guard roster (staff CRUD scoped to `type:'SECURITY'`), shift login/logout, on-duty, assignments, `GET /guards/dashboard` |
+| `/gates` | 6 | Gate/lane configuration + assignments + dashboard |
+| `/bills` | 14 | Bill generation, resident `GET /bills/mine`, pay (payment intent → verify), invoice PDF, receipts, adjustment |
+| `/payments` | 10 | Payment intent → verify → receipt PDF, resident history, transaction status |
+| `/accounting` | 9 | Journal entries (incl. reverse + rebuild-balances), ledger, trial balance |
+| `/incomes`, `/expenses` | 5 | Income and expense records, mark-expense-paid |
+| `/complaints` | 12 | Complaints, assignment, status transitions (incl. `POST /:id/status`), comments, verification |
+| `/work-orders`, `/service-requests` | 7 | Vendor work orders (schedule, parts, billing) and resident service requests |
 | `/vendors`, `/staff` | 5 | Vendor and staff directory |
 | `/amenities` | 5 | Amenity catalogue, slots + `GET /amenities/:id/availability?date=YYYY-MM-DD` |
 | `/amenity-bookings` | 10 | Booking, payment linkage, calendar, entry QR, check-in/out |
 | `/structure` | 5 | `GET /structure/tree`, `/structure/counts` |
-| `/buildings`, `/wings`, `/floors`, `/units` | 9 | Hierarchy CRUD |
-| `/residents`, `/unit-members`, `/family-members` | 6 | People CRUD |
-| `/vehicles`, `/parking-areas`, `/parking-slots` | 8 | Vehicles and parking allocation |
+| `/buildings`, `/wings`, `/floors`, `/units` | 9 | Hierarchy CRUD (incl. unit move-out) |
+| `/residents`, `/unit-members`, `/family-members` | 12 | People CRUD, CSV import/template, family permissions, vehicle verification |
+| `/vehicles`, `/parking-areas`, `/parking-slots` | 10 | Vehicles, parking allocation, slot release |
 | `/whoami` | 1 | Session context: user, society, membership, permissions, enabled modules, client hints |
 | `/meta`, `/health`, `/webhooks` | 4 | Metadata, health probes, payment gateway webhooks |
 
@@ -441,6 +442,7 @@ npm run dev:security            # security app (Expo) — web / Android / iOS
 npm run build                   # shared → backend → web apps
 npm run typecheck               # tsc --noEmit across all workspaces
 npm run test -w backend         # vitest
+npm run contract -w backend     # mobile contract check (36 checks, any hour of day)
 npm run db:provision -w backend # provision a single society database
 ```
 
