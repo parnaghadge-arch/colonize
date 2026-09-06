@@ -23,6 +23,7 @@ import { QueueScreen } from './src/screens/QueueScreen.tsx';
 import { ScanScreen } from './src/screens/ScanScreen.tsx';
 import { LogScreen } from './src/screens/LogScreen.tsx';
 import { BoardScreen } from './src/screens/BoardScreen.tsx';
+import { WalkInScreen } from './src/screens/WalkInScreen.tsx';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<ConsoleTabParamList>();
@@ -108,6 +109,7 @@ function Root() {
       ) : (
         <Stack.Screen name="Console" component={ConsoleTabs} options={{ headerShown: true, title: 'Gate console', headerStyle: { backgroundColor: colors.bg }, headerTintColor: colors.text }} />
       )}
+      <Stack.Screen name="WalkIn" component={WalkInScreen} options={{ headerShown: true, title: 'Register walk-in guest', headerStyle: { backgroundColor: colors.bg }, headerTintColor: colors.text, headerShadowVisible: false }} />
     </Stack.Navigator>
   );
 }

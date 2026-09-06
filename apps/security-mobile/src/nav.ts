@@ -12,6 +12,7 @@ export type RootStackParamList = {
   Login: undefined;
   Shift: undefined;
   Console: undefined;
+  WalkIn: undefined;
 };
 
 export type ConsoleTabParamList = {

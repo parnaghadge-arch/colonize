@@ -1,10 +1,10 @@
 /** Visitors — visits to my units: invite a guest (QR pass generated) or view the pass. */
 
 import React, { useCallback, useState } from 'react';
-import { Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
+import { Alert as RNAlert, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 
 import { Alert, Button, Card, EmptyState, Loading, Screen, ScreenTitle, StatusChip, colors } from '../components/ui.tsx';
-import { fetchPage } from '../lib/api.ts';
+import { api, fetchPage } from '../lib/api.ts';
 import { formatDate, formatTime } from '../lib/format.ts';
 import type { Visitor } from '../lib/types.ts';
 import type { TabScreenProps } from '../nav.ts';
@@ -38,11 +38,43 @@ export function VisitorsScreen({ navigation }: Props) {
 
   const hasPass = (v: Visitor) => Boolean(v.passId) || ['AWAITING_APPROVAL', 'APPROVED', 'PRE_APPROVED', 'INSIDE'].includes(String(v.status).toUpperCase());
 
+  const cancellable = (v: Visitor) => ['AWAITING_APPROVAL', 'APPROVED', 'PRE_APPROVED'].includes(String(v.status).toUpperCase());
+
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [cancelError, setCancelError] = useState<string | null>(null);
+
+  const cancel = (v: Visitor) => {
+    RNAlert.alert(
+      'Cancel this visit?',
+      `${v.visitorName ?? v.name ?? 'This visitor'} — ${v.visitDate ? `${formatDate(v.visitDate)} ` : ''}${v.expectedArrival ? `· ${v.expectedArrival}` : ''}\nTheir QR pass will stop working at the gate.`,
+      [
+        { text: 'Keep', style: 'cancel' },
+        {
+          text: 'Cancel visit',
+          style: 'destructive',
+          onPress: async () => {
+            setBusyId(v._id);
+            setCancelError(null);
+            try {
+              await api.post(`/visitors/${v._id}/cancel`, { reason: 'Cancelled by resident' });
+              await load();
+            } catch (err) {
+              setCancelError(err instanceof Error ? err.message : 'Could not cancel the visit.');
+            } finally {
+              setBusyId(null);
+            }
+          },
+        },
+      ],
+    );
+  };
+
   return (
     <Screen>
       <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.brand} />
       <ScreenTitle title="Visitors" subtitle="Guests coming to your unit" />
       {error ? <Alert tone="error">{error}</Alert> : null}
+      {cancelError ? <Alert tone="error">{cancelError}</Alert> : null}
       {items === null ? (
         <Loading />
       ) : items.length === 0 ? (
@@ -69,6 +101,11 @@ export function VisitorsScreen({ navigation }: Props) {
                     <Text style={styles.passLink}>Show pass ›</Text>
                   </Pressable>
                 ) : null}
+                {cancellable(v) ? (
+                  <Pressable onPress={() => cancel(v)} disabled={busyId !== null}>
+                    <Text style={styles.cancelLink}>{busyId === v._id ? 'Cancelling…' : 'Cancel visit'}</Text>
+                  </Pressable>
+                ) : null}
               </View>
             </View>
           </Card>
@@ -84,4 +121,5 @@ const styles = StyleSheet.create({
   name: { fontSize: 15, fontWeight: 600, color: colors.text },
   meta: { fontSize: 12.5, color: colors.textMuted },
   passLink: { color: colors.brandDark, fontSize: 13, fontWeight: '600' },
+  cancelLink: { color: colors.danger, fontSize: 12.5, fontWeight: '500' },
 });

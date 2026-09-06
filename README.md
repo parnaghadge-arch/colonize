@@ -115,6 +115,30 @@ npm run export:web -w @colonize/security-mobile    # → apps/security-mobile/di
 **On a device / simulator** — after `npm run dev:resident`, press `a` (Android), `i` (iOS)
 or `n` (Expo Go) in the Expo terminal.
 
+**⚠️ "Project is incompatible with this version of Expo Go"** — if your phone's Expo Go is
+a different SDK than this project (SDK 54), Expo Go refuses to load the bundle. The App Store
+only ever carries the *latest* Expo Go (currently SDK 57), so on a physical iOS device an
+SDK-54 project can never open in Expo Go. Three ways to run this app on a device:
+
+1. **Dev build — recommended, works on any device, ignores Expo Go entirely.** Both apps
+   ship `expo-dev-client`, so a normal build *is* a native app (with a dev menu) that pairs
+   with `expo start` like Expo Go does:
+   ```bash
+   # locally (needs Android Studio / Xcode):
+   npm run android -w @colonize/security-mobile    # builds & installs a dev build
+   npm run ios -w @colonize/resident-mobile        # iOS: macOS only
+   # or in the cloud (needs a free EAS account — `npx eas login` first):
+   cd apps/security-mobile && npx eas build --profile development --platform android   # → APK
+   cd apps/resident-mobile && npx eas build --profile development --platform android   # → APK
+   ```
+   Then install the APK/IPA on the device, run `npm run dev -w <app>` on your machine, and
+   open the app — it connects to the dev server exactly like Expo Go would.
+2. **Android only: install the Expo Go build that matches SDK 54.** Older Expo Go versions
+   can be sideloaded on Android: <https://expo.dev/go?sdkVersion=54&platform=android>, then
+   scan the `expo start` QR as usual.
+3. **iOS simulator:** install Expo Go for SDK 54 into the simulator
+   (<https://expo.dev/go?sdkVersion=54&platform=ios&device=false>) and press `i`.
+
 **API base URL** — each app resolves its backend in this order:
 
 1. the override stored in the app's secure store (the "API server" field on the login screen),
@@ -131,9 +155,11 @@ The defaults work for local development out of the box. If the API runs on anoth
 Use the [demo logins](#demo-logins) below:
 
 - **Resident app** — dashboard (bills, complaints, bookings), pay a bill, raise a complaint,
-  book an amenity and pay the slot fee, pre-approve a visitor and share the QR pass.
+  book an amenity and pay the slot fee, pre-approve a visitor and share the QR pass,
+  cancel a planned visit.
 - **Security app** — log into a shift at a gate, approve/decline the visitor queue, scan
-  entry/exit QR passes, watch the on-duty board.
+  entry/exit QR passes, register walk-in guests (live unit search), manual check-in/out,
+  watch the on-duty board.
 - **Society console (admin-web)** — full office surface: structure, residents, billing,
   helpdesk, amenities, vendors, staff.
 - **Platform console (super-admin-web)** — the SaaS control plane: societies, subscriptions,
@@ -185,10 +211,16 @@ Each app ships its own 1024×1024 icon, Android adaptive icon, splash and favico
 ```bash
 npm run dev:resident          # or dev:security
 # then in the Expo terminal:  a = Android,  i = iOS,  n = Expo Go
+```
 
-# or compile the native project yourself (no EAS):
+Both apps include `expo-dev-client`, so `expo run:…` (or the EAS `development` profile)
+produces a **native dev build** — a real installed app that talks to `expo start`. Use that
+whenever the phone's Expo Go is a different SDK than the project (Expo Go only loads its
+own SDK; see Step 6 above):
+
+```bash
 cd apps/resident-mobile
-npx expo run:android          # builds + installs on a connected device/emulator
+npx expo run:android          # builds + installs a dev build on a connected device/emulator
 npx expo run:ios              # macOS only
 ```
 
@@ -214,7 +246,8 @@ Native projects are generated at build time (EAS managed workflow) — the `andr
 
 **Verified** — `expo prebuild` generates clean Android (Gradle) and iOS (Xcode) projects
 for both apps: bundle ids, deep-link schemes, adaptive icons, camera permission + usage
-string, and the dark/light launch themes all land in the native manifests. `expo-doctor`
+string, the dark/light launch themes, and the `expo-dev-client` build properties
+(`EX_DEV_CLIENT_NETWORK_INSPECTOR`) all land in the native manifests. `expo-doctor`
 passes all local checks (the two remote metadata checks need network access to Expo's API).
 
 ---

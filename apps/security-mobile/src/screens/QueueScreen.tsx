@@ -20,7 +20,7 @@ import type { ConsoleTabScreenProps } from '../nav.ts';
 
 type Props = ConsoleTabScreenProps<'Queue'>;
 
-export function QueueScreen(_props: Props) {
+export function QueueScreen({ navigation }: Props) {
   const { gateId } = useSession();
   const [queue, setQueue] = useState<GateQueue | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -111,6 +111,12 @@ export function QueueScreen(_props: Props) {
           <Stat label="Out today" value={queue.counts?.exitsToday ?? 0} />
         </View>
       ) : null}
+
+      <Button
+        label="+ Register walk-in guest"
+        onPress={() => navigation.navigate('WalkIn')}
+        style={{ marginBottom: 14 }}
+      />
 
       {error ? <Alert tone="error">{error}</Alert> : null}
       {notice ? <Alert tone="success">{notice}</Alert> : null}
