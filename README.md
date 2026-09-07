@@ -47,6 +47,12 @@ npm install
 
 Installs every workspace in one go: `packages/shared`, `backend`, and all four apps.
 
+> **After every `git pull` that updates `package.json` / `package-lock.json`, run
+> `npm ci` (or `npm install`) again at the repo root.** The mobile apps reference config
+> plugins (e.g. `expo-dev-client`) that Expo resolves from `node_modules` at startup —
+> a stale install fails with `PluginError: Failed to resolve plugin for module "…"`.
+> On Windows: `cd /d D:\Society\colonize && npm ci`.
+
 ### Step 2 — Build the shared package
 
 ```bash
