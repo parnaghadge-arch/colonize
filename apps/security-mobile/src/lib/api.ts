@@ -15,7 +15,7 @@ const ENV_API_URL: string | undefined = process.env.EXPO_PUBLIC_API_URL;
 
 function platformDefaultUrl(): string {
   if (Platform.OS === 'android') return 'http://10.0.2.2:4000/api';
-  return 'http://localhost:4000/api';
+  return 'http://localhost:4000/api'; // web preview & iOS simulator
 }
 
 let baseUrlOverride: string | null = null;
@@ -171,7 +171,7 @@ export async function requestEnvelope<T>(path: string, options: RequestOptions =
   } catch (err) {
     if ((err as Error).name === 'AbortError') throw err;
     throw new ApiError(
-      `Cannot reach the Colonize API at ${resolveBaseUrl()}. Check your connection and the API server setting.`,
+      `Cannot reach the Colonize API at ${resolveBaseUrl()}. Is the backend running? Start it in a separate terminal: npm run seed -w backend (first run only), then npm run dev -w backend — and check the "API server" field below if it points elsewhere.`,
       0,
       'NETWORK_ERROR',
     );

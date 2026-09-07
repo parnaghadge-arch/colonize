@@ -111,6 +111,16 @@ npm run dev:resident                 # Expo dev server → open http://localhost
 npm run dev:security                 # second terminal; its web preview is on :8082
 ```
 
+> **Web preview says "Cannot reach the Colonize API" / the browser console shows a CORS or
+> `net::ERR_FAILED` line for `localhost:4000`** — the web preview is only the app shell; the
+> API is a *separate process* and must be running first. In two other terminals:
+> `npm run seed -w backend` (first run only), then `npm run dev -w backend`. Confirm the API
+> is up by opening http://localhost:4000/api/health/ready in the same browser (it should show
+> `{"status":"ready"}`). If the API terminal reports the port is already in use, find the old
+> process with `netstat -ano | findstr :4000` (Windows) and stop it, then start the API again.
+> On a device the same check applies: the "API server" field on the login screen must point
+> at a host the device can actually reach (your machine's LAN IP, not `localhost`).
+
 **Static export** (for hosting the web build):
 
 ```bash
