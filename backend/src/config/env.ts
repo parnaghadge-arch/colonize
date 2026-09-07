@@ -7,7 +7,10 @@ import { z } from 'zod';
 /**
  * Environment configuration (§68).
  *
- * Loading order (later wins): `.env` → `.env.<NODE_ENV>` → real environment variables.
+ * Precedence (first wins): real environment variables → `.env` → `.env.<NODE_ENV>`.
+ * A user's local `.env` therefore overrides the committed `.env.<NODE_ENV>` defaults;
+ * the mode file is the fallback, not the authority. Note: env files are read once at
+ * process start — edit one and restart the API for the change to take effect.
  * Nothing is hard-coded: every provider is selected by an env var so the same image runs
  * in development, staging and production.
  */
