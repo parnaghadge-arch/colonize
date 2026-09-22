@@ -21,7 +21,7 @@ import {
 } from '../components/ui.tsx';
 import { day, label, number } from '../lib/format.ts';
 import { useSession } from '../lib/session.tsx';
-import { ADMIN_ROLES, PLAN_CODES, SOCIETY_LAYOUTS, SOCIETY_LAYOUT_LABELS, SOCIETY_STATUSES, type Society } from '../lib/types.ts';
+import { ADMIN_ROLES, PLAN_CODES, SOCIETY_LAYOUTS, SOCIETY_LAYOUT_LABELS, SOCIETY_STATUSES, type Society, type SocietyLayout } from '../lib/types.ts';
 
 const SORTS = [
   { value: 'createdAt', label: 'Newest first' },
@@ -190,6 +190,7 @@ export function SocietiesPage() {
                 ),
               },
               { key: 'tier', header: 'Plan', render: (s) => <Pill tone={s.tier === 'ENTERPRISE' ? 'brand' : undefined}>{label(s.tier ?? 'FREE')}</Pill> },
+              { key: 'layout', header: 'Layout', render: (s) => (s.layout ? <span className="small">{SOCIETY_LAYOUT_LABELS[s.layout as SocietyLayout] ?? label(s.layout)}</span> : <span className="faint small">—</span>) },
               { key: 'units', header: 'Units', align: 'right', render: (s) => number(s.totalUnits ?? 0) },
               { key: 'residents', header: 'Residents', align: 'right', render: (s) => number(s.totalResidents ?? 0) },
               {

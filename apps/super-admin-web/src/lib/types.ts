@@ -41,6 +41,26 @@ export const SOCIETY_LAYOUT_LABELS: Record<SocietyLayout, string> = {
   MIXED: 'Both (mixed development)',
 };
 
+/** Legal/organizational form of the society — editable in the Profile tab. Mirrors `SOCIETY_TYPES` in @colonize/shared. */
+export const SOCIETY_TYPES = [
+  'RESIDENTIAL_SOCIETY',
+  'APARTMENT_COMPLEX',
+  'GATED_COMMUNITY',
+  'HOUSING_SOCIETY',
+  'COMMERCIAL_COMMUNITY',
+  'MIXED_USE',
+] as const;
+export type SocietyType = (typeof SOCIETY_TYPES)[number];
+
+export const SOCIETY_TYPE_LABELS: Record<SocietyType, string> = {
+  RESIDENTIAL_SOCIETY: 'Residential society',
+  APARTMENT_COMPLEX: 'Apartment complex',
+  GATED_COMMUNITY: 'Gated community',
+  HOUSING_SOCIETY: 'Housing society',
+  COMMERCIAL_COMMUNITY: 'Commercial community',
+  MIXED_USE: 'Mixed use',
+};
+
 export const SUBSCRIPTION_STATUSES = ['TRIAL', 'ACTIVE', 'PAST_DUE', 'CANCELLED', 'EXPIRED', 'SUSPENDED'] as const;
 
 export const RENEWAL_MODES = ['MONTHLY', 'QUARTERLY', 'ANNUAL'] as const;

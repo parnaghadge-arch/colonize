@@ -16,6 +16,7 @@ import {
   Select,
   StatusPill,
   useToast,
+  type Column,
 } from '../components/ui.tsx';
 import { number } from '../lib/format.ts';
 import { useSession } from '../lib/session.tsx';
@@ -51,6 +52,27 @@ export function StructurePage() {
 
   const [dialog, setDialog] = useState<null | 'building' | 'wing' | 'unit' | 'generate'>(null);
   const [error, setError] = useState<unknown>(null);
+  const [editTarget, setEditTarget] = useState<null | { kind: 'building' | 'wing' | 'unit'; data: Record<string, unknown> }>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
+
+  function reloadStructure() {
+    tree.reload();
+    units.reload();
+  }
+
+  async function remove(kind: 'building' | 'wing' | 'unit', data: Record<string, unknown>, what: string) {
+    setDeleting(String(data._id));
+    try {
+      await api.del(`/${kind}s/${String(data._id)}`);
+      toast.success(`${what} removed`);
+      if (kind === 'building' && buildingId === String(data._id)) setBuildingId('');
+      reloadStructure();
+    } catch (err) {
+      toast.error(err);
+    } finally {
+      setDeleting(null);
+    }
+  }
 
   const buildings = tree.data?.items ?? [];
   const wings = useMemo(() => {
@@ -77,6 +99,61 @@ export function StructurePage() {
   }
 
   if (tree.loading && buildings.length === 0) return <Loading label="Loading the society structure…" />;
+
+  const unitColumns: Array<Column<Unit>> = [
+    { key: 'label', header: 'Unit', render: (u) => <b>{u.label || u.unitNumber}</b> },
+    { key: 'building', header: 'Building', render: (u) => u.building?.name ?? '—' },
+    { key: 'wing', header: 'Wing', render: (u) => u.wing?.name ?? '—' },
+    { key: 'floor', header: 'Floor', align: 'right', render: (u) => number(u.floorNumber) },
+    { key: 'type', header: 'Type', render: (u) => <Pill>{u.type}</Pill> },
+    { key: 'status', header: 'Status', render: (u) => <StatusPill status={u.status} /> },
+    {
+      key: 'occupancy',
+      header: 'Occupancy',
+      render: (u) => <span className="small muted">{u.occupancyType?.split('_').join(' ') ?? '—'}</span>,
+    },
+    {
+      key: 'people',
+      header: 'People',
+      align: 'right',
+      render: (u) => (
+        <span className="small muted">
+          {number(u.ownerCount ?? 0)} / {number(u.tenantCount ?? 0)} / {number(u.familyCount ?? 0)}
+        </span>
+      ),
+    },
+    { key: 'due', header: 'Outstanding', align: 'right', render: (u) => number(u.outstandingAmount ?? 0) },
+  ];
+  if (can('unit:update') || can('unit:delete')) {
+    unitColumns.push({
+      key: 'actions',
+      header: '',
+      align: 'right',
+      render: (u) => (
+        <div className="row" style={{ gap: 6, justifyContent: 'flex-end' }}>
+          {can('unit:update') ? (
+            <Button size="sm" variant="ghost" onClick={() => setEditTarget({ kind: 'unit', data: u as unknown as Record<string, unknown> })}>
+              Edit
+            </Button>
+          ) : null}
+          {can('unit:delete') ? (
+            <Button
+              size="sm"
+              variant="danger"
+              busy={deleting === u._id}
+              onClick={() => {
+                if (window.confirm(`Delete unit ${u.label || u.unitNumber}? Residents, bills and bookings linked to it stop resolving to a unit.`)) {
+                  void remove('unit', u as unknown as Record<string, unknown>, `Unit ${u.label || u.unitNumber}`);
+                }
+              }}
+            >
+              Delete
+            </Button>
+          ) : null}
+        </div>
+      ),
+    });
+  }
 
   return (
     <div className="stack">
@@ -128,10 +205,27 @@ export function StructurePage() {
                 key={building._id}
                 building={building}
                 selected={buildingId === building._id}
+                deleting={deleting === String(building._id)}
+                canEdit={can('building:update')}
+                canDelete={can('building:delete')}
+                canEditWing={can('wing:update')}
+                canDeleteWing={can('wing:delete')}
                 onSelect={() => {
                   setBuildingId(building._id);
                   setWingId('');
                   setPage(1);
+                }}
+                onEdit={() => setEditTarget({ kind: 'building', data: building as unknown as Record<string, unknown> })}
+                onDelete={() => {
+                  if (window.confirm(`Delete building ${String(building.name)}? Its wings, floors and units stop resolving to it (the records are kept for the audit trail).`)) {
+                    void remove('building', building as unknown as Record<string, unknown>, `Building ${String(building.name)}`);
+                  }
+                }}
+                onEditWing={(wing) => setEditTarget({ kind: 'wing', data: { ...((wing as unknown as Record<string, unknown>)), buildingId: building._id } })}
+                onDeleteWing={(wing) => {
+                  if (window.confirm(`Delete wing ${String(wing.name)}? Units in this wing become wing-less.`)) {
+                    void remove('wing', { ...(wing as unknown as Record<string, unknown>), buildingId: building._id }, `Wing ${String(wing.name)}`);
+                  }
                 }}
               />
             ))}
@@ -230,30 +324,7 @@ export function StructurePage() {
                 hint={buildingId ? 'Try another building or wing.' : 'Add a unit to get started.'}
               />
             }
-            columns={[
-              { key: 'label', header: 'Unit', render: (u) => <b>{u.label || u.unitNumber}</b> },
-              { key: 'building', header: 'Building', render: (u) => u.building?.name ?? '—' },
-              { key: 'wing', header: 'Wing', render: (u) => u.wing?.name ?? '—' },
-              { key: 'floor', header: 'Floor', align: 'right', render: (u) => number(u.floorNumber) },
-              { key: 'type', header: 'Type', render: (u) => <Pill>{u.type}</Pill> },
-              { key: 'status', header: 'Status', render: (u) => <StatusPill status={u.status} /> },
-              {
-                key: 'occupancy',
-                header: 'Occupancy',
-                render: (u) => <span className="small muted">{u.occupancyType?.split('_').join(' ') ?? '—'}</span>,
-              },
-              {
-                key: 'people',
-                header: 'People',
-                align: 'right',
-                render: (u) => (
-                  <span className="small muted">
-                    {number(u.ownerCount ?? 0)} / {number(u.tenantCount ?? 0)} / {number(u.familyCount ?? 0)}
-                  </span>
-                ),
-              },
-              { key: 'due', header: 'Outstanding', align: 'right', render: (u) => number(u.outstandingAmount ?? 0) },
-            ]}
+            columns={unitColumns}
           />
         )}
 
@@ -302,6 +373,45 @@ export function StructurePage() {
           setError={setError}
         />
       ) : null}
+
+      {editTarget?.kind === 'building' ? (
+        <EditBuildingForm
+          data={editTarget.data}
+          onClose={() => setEditTarget(null)}
+          onDone={() => {
+            setEditTarget(null);
+            afterMutation('Building updated');
+          }}
+          error={error}
+          setError={setError}
+        />
+      ) : null}
+
+      {editTarget?.kind === 'wing' ? (
+        <EditWingForm
+          data={editTarget.data}
+          onClose={() => setEditTarget(null)}
+          onDone={() => {
+            setEditTarget(null);
+            afterMutation('Wing updated');
+          }}
+          error={error}
+          setError={setError}
+        />
+      ) : null}
+
+      {editTarget?.kind === 'unit' ? (
+        <EditUnitForm
+          data={editTarget.data}
+          onClose={() => setEditTarget(null)}
+          onDone={() => {
+            setEditTarget(null);
+            afterMutation('Unit updated');
+          }}
+          error={error}
+          setError={setError}
+        />
+      ) : null}
     </div>
   );
 }
@@ -309,11 +419,29 @@ export function StructurePage() {
 function BuildingCard({
   building,
   selected,
+  deleting,
+  canEdit,
+  canDelete,
+  canEditWing,
+  canDeleteWing,
   onSelect,
+  onEdit,
+  onDelete,
+  onEditWing,
+  onDeleteWing,
 }: {
   building: StructureTreeNode;
   selected: boolean;
+  deleting: boolean;
+  canEdit: boolean;
+  canDelete: boolean;
+  canEditWing: boolean;
+  canDeleteWing: boolean;
   onSelect: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+  onEditWing: (wing: StructureTreeNode) => void;
+  onDeleteWing: (wing: StructureTreeNode) => void;
 }) {
   const wings = (building.wings ?? []) as StructureTreeNode[];
   return (
@@ -328,9 +456,21 @@ function BuildingCard({
             Code {String(building.code ?? '—')} · {number(building.unitCount ?? 0)} units
           </p>
         </div>
-        <Button size="sm" variant={selected ? 'primary' : 'default'} onClick={onSelect}>
-          {selected ? 'Selected' : 'View units'}
-        </Button>
+        <div className="row" style={{ gap: 6 }}>
+          {canEdit ? (
+            <Button size="sm" variant="ghost" onClick={onEdit}>
+              Edit
+            </Button>
+          ) : null}
+          {canDelete ? (
+            <Button size="sm" variant="danger" busy={deleting} onClick={onDelete}>
+              Delete
+            </Button>
+          ) : null}
+          <Button size="sm" variant={selected ? 'primary' : 'default'} onClick={onSelect}>
+            {selected ? 'Selected' : 'View units'}
+          </Button>
+        </div>
       </div>
       <div className="card__body">
         {wings.length === 0 ? (
@@ -338,9 +478,35 @@ function BuildingCard({
         ) : (
           <div className="row row--wrap" style={{ gap: 6 }}>
             {wings.map((wing) => (
-              <Pill key={wing._id} tone={selected ? 'brand' : 'neutral'}>
+              <span key={wing._id} className="pill" style={selected ? { background: 'var(--brand-soft)' } : undefined}>
                 {String(wing.name)} · {number(wing.unitCount ?? 0)}
-              </Pill>
+                {canEditWing || canDeleteWing ? (
+                  <span style={{ display: 'inline-flex', gap: 6, marginLeft: 6 }}>
+                    {canEditWing ? (
+                      <button
+                        type="button"
+                        onClick={() => onEditWing(wing)}
+                        aria-label={`Edit wing ${String(wing.name)}`}
+                        title="Edit wing"
+                        style={{ border: 0, background: 'none', cursor: 'pointer', fontSize: 12, padding: 0 }}
+                      >
+                        ✎
+                      </button>
+                    ) : null}
+                    {canDeleteWing ? (
+                      <button
+                        type="button"
+                        onClick={() => onDeleteWing(wing)}
+                        aria-label={`Delete wing ${String(wing.name)}`}
+                        title="Delete wing"
+                        style={{ border: 0, background: 'none', cursor: 'pointer', fontSize: 12, padding: 0, color: 'var(--danger, #c0392b)' }}
+                      >
+                        ✕
+                      </button>
+                    ) : null}
+                  </span>
+                ) : null}
+              </span>
             ))}
           </div>
         )}
@@ -695,6 +861,232 @@ function GenerateUnitsForm({
         <Field label="First unit number">
           <Input type="number" min={1} value={startNumber} onChange={(e) => setStartNumber(e.target.value)} />
         </Field>
+      </form>
+    </Modal>
+  );
+}
+
+/* ------------------------------- edit forms -------------------------------- */
+
+function EditBuildingForm({ data, onClose, onDone, error, setError }: FormProps & { data: Record<string, unknown>; onDone: () => void }) {
+  const [name, setName] = useState(String(data.name ?? ''));
+  const [code, setCode] = useState(String(data.code ?? ''));
+  const [type, setType] = useState(String(data.type ?? 'TOWER'));
+  const [totalFloors, setTotalFloors] = useState(String(data.totalFloors ?? ''));
+  const [unitsPerFloor, setUnitsPerFloor] = useState(String(data.unitsPerFloor ?? ''));
+  const [hasWings, setHasWings] = useState(Boolean(data.hasWings ?? false));
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await api.patch(`/buildings/${String(data._id)}`, {
+        name: name.trim(),
+        code: code.trim().toUpperCase(),
+        type,
+        totalFloors: totalFloors ? Number(totalFloors) : undefined,
+        unitsPerFloor: unitsPerFloor ? Number(unitsPerFloor) : undefined,
+        hasWings,
+      });
+      onDone();
+    } catch (err) {
+      setError(err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      title={`Edit building — ${name || '—'}`}
+      onClose={onClose}
+      footer={
+        <>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button variant="primary" busy={busy} onClick={submit} disabled={name.trim().length === 0}>
+            Save changes
+          </Button>
+        </>
+      }
+    >
+      {error ? <ErrorAlert error={error} /> : null}
+      <form onSubmit={submit}>
+        <div className="form-row">
+          <Field label="Name" required>
+            <Input value={name} onChange={(e) => setName(e.target.value)} required autoFocus />
+          </Field>
+          <Field label="Code" required hint="Short code used on unit labels.">
+            <Input value={code} onChange={(e) => setCode(e.target.value)} maxLength={8} required />
+          </Field>
+        </div>
+        <div className="form-row">
+          <Field label="Type">
+            <Select value={type} onChange={(e) => setType(e.target.value)}>
+              {['TOWER', 'BUILDING', 'BLOCK', 'VILLA_ROW', 'COMPLEX'].map((t) => (
+                <option key={t} value={t}>
+                  {t.split('_').join(' ')}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Has wings">
+            <Select value={hasWings ? 'yes' : 'no'} onChange={(e) => setHasWings(e.target.value === 'yes')}>
+              <option value="yes">Yes — split into wings</option>
+              <option value="no">No — floors directly</option>
+            </Select>
+          </Field>
+        </div>
+        <div className="form-row">
+          <Field label="Total floors" hint="Records only — floors already created are not renumbered.">
+            <Input type="number" min={0} value={totalFloors} onChange={(e) => setTotalFloors(e.target.value)} />
+          </Field>
+          <Field label="Units per floor">
+            <Input type="number" min={0} value={unitsPerFloor} onChange={(e) => setUnitsPerFloor(e.target.value)} />
+          </Field>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function EditWingForm({ data, onClose, onDone, error, setError }: FormProps & { data: Record<string, unknown>; onDone: () => void }) {
+  const [name, setName] = useState(String(data.name ?? ''));
+  const [code, setCode] = useState(String(data.code ?? ''));
+  const [totalFloors, setTotalFloors] = useState(String(data.totalFloors ?? ''));
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await api.patch(`/wings/${String(data._id)}`, {
+        name: name.trim(),
+        code: code.trim().toUpperCase(),
+        totalFloors: totalFloors ? Number(totalFloors) : undefined,
+      });
+      onDone();
+    } catch (err) {
+      setError(err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      title={`Edit wing — ${name || '—'}`}
+      onClose={onClose}
+      footer={
+        <>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button variant="primary" busy={busy} onClick={submit} disabled={name.trim().length === 0}>
+            Save changes
+          </Button>
+        </>
+      }
+    >
+      {error ? <ErrorAlert error={error} /> : null}
+      <form onSubmit={submit}>
+        <div className="form-row">
+          <Field label="Name" required>
+            <Input value={name} onChange={(e) => setName(e.target.value)} required autoFocus />
+          </Field>
+          <Field label="Code" required>
+            <Input value={code} onChange={(e) => setCode(e.target.value)} maxLength={8} required />
+          </Field>
+        </div>
+        <Field label="Total floors" hint="Records only — floors already created are not renumbered.">
+          <Input type="number" min={0} value={totalFloors} onChange={(e) => setTotalFloors(e.target.value)} />
+        </Field>
+      </form>
+    </Modal>
+  );
+}
+
+function EditUnitForm({ data, onClose, onDone, error, setError }: FormProps & { data: Record<string, unknown>; onDone: () => void }) {
+  const [unitNumber, setUnitNumber] = useState(String(data.unitNumber ?? ''));
+  const [floorNumber, setFloorNumber] = useState(String(data.floorNumber ?? '1'));
+  const [type, setType] = useState(String(data.type ?? 'FLAT'));
+  const [status, setStatus] = useState(String(data.status ?? 'VACANT'));
+  const [carpetAreaSqft, setCarpetArea] = useState(data.carpetAreaSqft != null ? String(data.carpetAreaSqft) : '');
+  const [bedrooms, setBedrooms] = useState(data.bedrooms != null ? String(data.bedrooms) : '');
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await api.patch(`/units/${String(data._id)}`, {
+        unitNumber: unitNumber.trim().toUpperCase(),
+        floorNumber: Number(floorNumber),
+        type,
+        status,
+        carpetAreaSqft: carpetAreaSqft ? Number(carpetAreaSqft) : null,
+        bedrooms: bedrooms ? Number(bedrooms) : null,
+      });
+      onDone();
+    } catch (err) {
+      setError(err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      title={`Edit unit — ${String(data.label ?? data.unitNumber ?? '')}`}
+      onClose={onClose}
+      footer={
+        <>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button variant="primary" busy={busy} onClick={submit} disabled={unitNumber.trim().length === 0}>
+            Save changes
+          </Button>
+        </>
+      }
+    >
+      {error ? <ErrorAlert error={error} /> : null}
+      <form onSubmit={submit}>
+        <div className="form-row">
+          <Field label="Unit number" required hint="The label is derived from this, the wing and the floor.">
+            <Input value={unitNumber} onChange={(e) => setUnitNumber(e.target.value)} required autoFocus />
+          </Field>
+          <Field label="Floor number">
+            <Input type="number" value={floorNumber} onChange={(e) => setFloorNumber(e.target.value)} />
+          </Field>
+        </div>
+        <div className="form-row">
+          <Field label="Type">
+            <Select value={type} onChange={(e) => setType(e.target.value)}>
+              {['FLAT', 'VILLA', 'PENTHOUSE', 'SHOP', 'OFFICE', 'GARAGE', 'STUDIO'].map((t) => (
+                <option key={t} value={t}>
+                  {t.split('_').join(' ')}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Status">
+            <Select value={status} onChange={(e) => setStatus(e.target.value)}>
+              {['VACANT', 'OCCUPIED', 'LOCKED', 'UNDER_MAINTENANCE'].map((s) => (
+                <option key={s} value={s}>
+                  {s.split('_').join(' ')}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        </div>
+        <div className="form-row">
+          <Field label="Carpet area (sq ft)">
+            <Input type="number" min={0} value={carpetAreaSqft} onChange={(e) => setCarpetArea(e.target.value)} />
+          </Field>
+          <Field label="Bedrooms">
+            <Input type="number" min={0} value={bedrooms} onChange={(e) => setBedrooms(e.target.value)} />
+          </Field>
+        </div>
       </form>
     </Modal>
   );

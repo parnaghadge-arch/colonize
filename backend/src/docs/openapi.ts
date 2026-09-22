@@ -17,6 +17,7 @@ import {
   subscriptionSchema as platformSubscriptionSchema,
   onboardingSchema as platformOnboardingSchema,
   inviteSocietyAdminSchema as platformInviteAdminSchema,
+  updateSocietyAdminSchema as platformUpdateSocietyAdminSchema,
   setSocietyStatusSchema as platformSetStatusSchema,
 } from '../modules/societies/societiesRouter.js';
 
@@ -381,6 +382,7 @@ function validationSchemas(): Record<string, JsonSchema> {
     ['PlatformSubscriptionInput', platformSubscriptionSchema],
     ['PlatformOnboardingInput', platformOnboardingSchema],
     ['PlatformInviteAdminInput', platformInviteAdminSchema],
+    ['PlatformUpdateSocietyAdminInput', platformUpdateSocietyAdminSchema],
     ['PlatformSetStatusInput', platformSetStatusSchema],
     ['CreateBuildingInput', V.createBuildingSchema],
     ['UpdateBuildingInput', V.updateBuildingSchema],
@@ -677,6 +679,16 @@ export function buildOpenApiDocument(): Record<string, unknown> {
       description: 'Creates a login in the society\'s own database. Enforced against the plan\'s `maxAdmins` limit, so the request fails rather than silently exceeding it. Either an email or a phone is needed for the administrator to sign in.',
       body: ref('PlatformInviteAdminInput'),
       responses: { 201: okJson(envelope({ type: 'object', additionalProperties: true }), 'Invited'), ...STANDARD_ERRORS } }),
+  };
+  paths[`${P}/{id}/admins/{userId}`] = {
+    parameters: [ID_PARAM],
+    patch: op({ tag: 'Platform', summary: 'Update a society admin', operationId: 'updateSocietyAdmin', security: platformOnly,
+      description: 'Changes identity, roles or the sign-in password of an existing administrator. A changed email or phone is a changed login identifier, so the login directory is re-synced and the new identifier resolves on the very next sign-in attempt.',
+      body: ref('PlatformUpdateSocietyAdminInput'),
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Updated'), ...STANDARD_ERRORS } }),
+    delete: op({ tag: 'Platform', summary: 'Remove a society admin', operationId: 'removeSocietyAdmin', security: platformOnly,
+      description: 'Soft-deletes the administrator from the society and re-syncs the login directory, so the person can no longer sign in to this society. Refused (409) when it would remove the last administrator of an ACTIVE society.',
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Removed'), ...errResponses([409, 'Last administrator of an active society']), ...STANDARD_ERRORS } }),
   };
   paths[`${P}/{id}/audit-logs`] = {
     get: op({ tag: 'Platform', summary: 'Audit trail for a society', operationId: 'societyAuditLogs', security: platformOnly, params: LIST_PARAMS,

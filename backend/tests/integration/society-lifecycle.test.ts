@@ -4,10 +4,13 @@ import { newId } from '../../src/db/ids.js';
 import {
   SOCIETY_ADMIN_ROLES,
   activateSociety,
+  applyLayoutExclusions,
   createSociety,
   createSocietyAdmin,
   provisionSocietyDatabase,
+  removeSocietyAdmin,
   setSocietyStatus,
+  updateSocietyAdmin,
   type SocietiesContext,
 } from '../../src/modules/societies/societiesService.js';
 import type { StructureContext } from '../../src/modules/structure/structureService.js';
@@ -270,5 +273,82 @@ describe('administrator credentials', () => {
     await expect(
       createSocietyAdmin(structureCtx(id, db), { fullName: 'Unreachable' }),
     ).rejects.toThrow(/phone number or an email/i);
+  });
+});
+
+/* --------------------- administrator management (§46) ----------------------- */
+
+describe('administrator management', () => {
+  it('updates an administrator and re-resolves them under the new identifier', async () => {
+    const { id, db } = await newSociety('admin-update');
+    const ctx = structureCtx(id, db);
+    const original = 'original@admin-update.test';
+    const created = await createSocietyAdmin(ctx, { fullName: 'Update Me', email: original, phone: '+919800005555', password: 'Lifecycle@1234', roles: ['SOCIETY_ADMIN'] });
+
+    const changed = await updateSocietyAdmin(ctx, String(created._id), {
+      fullName: 'Updated Name',
+      email: 'changed@admin-update.test',
+      password: 'Lifecycle@9999',
+    });
+
+    expect(changed.fullName).toBe('Updated Name');
+    expect(changed.email).toBe('changed@admin-update.test');
+    expect(changed.mustChangePassword).toBe(false);
+
+    // The login directory must resolve the NEW identifier and drop the old one.
+    const byNew = await findByIdentifier('changed@admin-update.test');
+    expect(byNew?.memberships?.some((m) => m.societyId === id)).toBe(true);
+    const byOld = await findByIdentifier(original);
+    expect((byOld?.memberships ?? []).some((m) => m.societyId === id && m.userId === String(created._id))).toBe(false);
+  });
+
+  it('refuses to remove the last administrator of an active society', async () => {
+    const { id, db } = await newSociety('last-admin');
+    const ctx = structureCtx(id, db);
+    const only = await createSocietyAdmin(ctx, { fullName: 'Only One', email: 'only@last-admin.test', phone: '+919800006666', password: 'Lifecycle@1234', roles: ['SOCIETY_ADMIN'] });
+    await seedUnit(id, db);
+    await activateSociety(ctx, id);
+
+    await expect(removeSocietyAdmin(ctx, String(only._id))).rejects.toThrow(/last administrator/i);
+    // Still resolvable after the refused removal.
+    expect((await findByIdentifier('only@last-admin.test'))?.memberships?.some((m) => m.societyId === id)).toBe(true);
+  });
+
+  it('removes a non-last administrator and un-resolves their identifier', async () => {
+    const { id, db } = await newSociety('admin-remove');
+    const ctx = structureCtx(id, db);
+    const a = await createSocietyAdmin(ctx, { fullName: 'Admin A', email: 'a@admin-remove.test', phone: '+919800007777', password: 'Lifecycle@1234', roles: ['SOCIETY_ADMIN'] });
+    const b = await createSocietyAdmin(ctx, { fullName: 'Admin B', email: 'b@admin-remove.test', phone: '+919800008888', password: 'Lifecycle@1234', roles: ['SOCIETY_ADMIN'] });
+    await seedUnit(id, db);
+    await activateSociety(ctx, id);
+
+    await removeSocietyAdmin(ctx, String(a._id));
+
+    const byRemoved = await findByIdentifier('a@admin-remove.test');
+    expect((byRemoved?.memberships ?? []).some((m) => m.societyId === id && m.userId === String(a._id))).toBe(false);
+    // The surviving administrator is untouched.
+    expect((await findByIdentifier('b@admin-remove.test'))?.memberships?.some((m) => m.societyId === id)).toBe(true);
+    expect(await db.collection('users').findById(b._id)).toBeTruthy();
+  });
+});
+
+/* ------------------------- layout module exclusions -------------------------- */
+
+describe('applyLayoutExclusions', () => {
+  const standardModules = ['residents', 'visitorManagement', 'multiGate', 'payments', 'vehiclesParking'];
+
+  it('removes multiGate for a plot society and keeps the rest', () => {
+    const { modules, removed } = applyLayoutExclusions(standardModules, 'PLOT');
+    expect(removed).toEqual(['multiGate']);
+    expect(modules).toEqual(['residents', 'visitorManagement', 'payments', 'vehiclesParking']);
+  });
+
+  it('changes nothing for a building or mixed society', () => {
+    expect(applyLayoutExclusions(standardModules, 'BUILDING')).toEqual({ modules: standardModules, removed: [] });
+    expect(applyLayoutExclusions(standardModules, 'MIXED')).toEqual({ modules: standardModules, removed: [] });
+  });
+
+  it('is a no-op when the society has no module list yet', () => {
+    expect(applyLayoutExclusions(undefined, 'PLOT')).toEqual({ modules: [], removed: [] });
   });
 });

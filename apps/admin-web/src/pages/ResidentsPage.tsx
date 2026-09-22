@@ -66,6 +66,22 @@ export function ResidentsPage() {
   const [selected, setSelected] = useState<Resident | null>(null);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<unknown>(null);
+  const [editing, setEditing] = useState<Resident | null>(null);
+  const [removing, setRemoving] = useState(false);
+
+  async function remove(resident: Resident) {
+    setRemoving(true);
+    try {
+      await api.del(`/residents/${resident._id}`);
+      toast.success(`${resident.fullName} removed from this society`);
+      setSelected(null);
+      residents.reload();
+    } catch (err) {
+      toast.error(err);
+    } finally {
+      setRemoving(false);
+    }
+  }
 
   return (
     <div className="stack">
@@ -163,7 +179,32 @@ export function ResidentsPage() {
       </Card>
 
       {selected ? (
-        <ResidentDetail resident={selected} onClose={() => setSelected(null)} />
+        <ResidentDetail
+          resident={selected}
+          closing={removing}
+          canEdit={can('resident:update')}
+          canDelete={can('resident:delete')}
+          onClose={() => setSelected(null)}
+          onEdit={() => setEditing(selected)}
+          onRemove={() => {
+            if (window.confirm(`Remove ${selected.fullName} from this society? Their sign-in and unit association will stop working.`)) {
+              void remove(selected);
+            }
+          }}
+        />
+      ) : null}
+
+      {editing ? (
+        <EditResidentForm
+          resident={editing}
+          onClose={() => setEditing(null)}
+          onDone={() => {
+            setEditing(null);
+            toast.success('Resident updated');
+            residents.reload();
+            setSelected(null);
+          }}
+        />
       ) : null}
 
       {creating ? (
@@ -209,12 +250,42 @@ export function Avatar({ name }: { name?: string | null }) {
   );
 }
 
-function ResidentDetail({ resident, onClose }: { resident: Resident; onClose: () => void }) {
+function ResidentDetail({
+  resident,
+  onClose,
+  canEdit,
+  canDelete,
+  onEdit,
+  onRemove,
+  closing,
+}: {
+  resident: Resident;
+  onClose: () => void;
+  canEdit: boolean;
+  canDelete: boolean;
+  onEdit: () => void;
+  onRemove: () => void;
+  closing: boolean;
+}) {
   const family = useList<FamilyMember>('/family-members', { residentId: resident._id, limit: 50 }, [resident._id]);
   const vehicles = useList<Vehicle>('/vehicles', { residentId: resident._id, limit: 50 }, [resident._id]);
 
   return (
     <Modal title={resident.fullName} onClose={onClose} wide>
+      {canEdit || canDelete ? (
+        <div className="row" style={{ gap: 8, marginBottom: 12, justifyContent: 'flex-end' }}>
+          {canEdit ? (
+            <Button size="sm" onClick={onEdit}>
+              Edit
+            </Button>
+          ) : null}
+          {canDelete ? (
+            <Button size="sm" variant="danger" busy={closing} onClick={onRemove}>
+              Remove
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
       <div className="grid grid--2">
         <Card title="Profile">
           <KeyValue
@@ -353,6 +424,107 @@ function CreateResidentForm({
           </Field>
           <Field label="Move-in date">
             <Input type="date" value={moveInDate} onChange={(e) => setMoveInDate(e.target.value)} />
+          </Field>
+        </div>
+
+        <UnitPicker value={unitId} onChange={setUnitId} />
+      </form>
+    </Modal>
+  );
+}
+
+function EditResidentForm({
+  resident,
+  onClose,
+  onDone,
+}: {
+  resident: Resident;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [fullName, setFullName] = useState(resident.fullName ?? '');
+  const [phone, setPhone] = useState(resident.phone ?? '');
+  const [email, setEmail] = useState(resident.email ?? '');
+  const [kind, setKind] = useState(resident.kind ?? 'OWNER');
+  const [unitId, setUnitId] = useState(resident.unitId ?? '');
+  const [isPrimary, setIsPrimary] = useState(Boolean(resident.isPrimary));
+  const [moveInDate, setMoveInDate] = useState(resident.moveInDate ?? '');
+  const [occupation, setOccupation] = useState(String(resident.occupation ?? ''));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await api.patch(`/residents/${resident._id}`, {
+        fullName: fullName.trim(),
+        phone: phone.trim() || undefined,
+        email: email.trim() || undefined,
+        kind,
+        unitId: unitId || undefined,
+        isPrimary,
+        moveInDate: moveInDate || undefined,
+        occupation: occupation.trim() || undefined,
+      });
+      onDone();
+    } catch (err) {
+      setError(err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      title={`Edit resident — ${resident.fullName}`}
+      onClose={onClose}
+      footer={
+        <>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button variant="primary" busy={busy} onClick={submit} disabled={!unitId}>
+            Save changes
+          </Button>
+        </>
+      }
+    >
+      {error ? <ErrorAlert error={error} /> : null}
+      <form onSubmit={submit}>
+        <Field label="Full name" required>
+          <Input value={fullName} onChange={(e) => setFullName(e.target.value)} required autoFocus />
+        </Field>
+        <div className="form-row">
+          <Field label="Mobile number" required hint="Used for OTP sign-in.">
+            <Input value={phone} onChange={(e) => setPhone(e.target.value)} required />
+          </Field>
+          <Field label="Email">
+            <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+          </Field>
+        </div>
+        <div className="form-row">
+          <Field label="Kind" required>
+            <Select value={kind} onChange={(e) => setKind(e.target.value)}>
+              {['OWNER', 'TENANT', 'FAMILY', 'COMPANY'].map((k) => (
+                <option key={k} value={k}>
+                  {k.charAt(0) + k.slice(1).toLowerCase()}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Move-in date">
+            <Input type="date" value={moveInDate} onChange={(e) => setMoveInDate(e.target.value)} />
+          </Field>
+        </div>
+        <div className="form-row">
+          <Field label="Occupation">
+            <Input value={occupation} onChange={(e) => setOccupation(e.target.value)} />
+          </Field>
+          <Field label="Primary contact">
+            <Select value={isPrimary ? 'yes' : 'no'} onChange={(e) => setIsPrimary(e.target.value === 'yes')}>
+              <option value="yes">Yes</option>
+              <option value="no">No</option>
+            </Select>
           </Field>
         </div>
 

@@ -150,6 +150,37 @@ export async function rebuildForSociety(
     { societyId: society.id },
     { projection: { _id: 1, phone: 1, email: 1, roles: 1, status: 1, unitIds: 1 }, limit: 100_000 },
   );
+
+  // The identifiers this society's users currently sign in with.
+  const livePhones = new Set<string>();
+  const liveEmails = new Set<string>();
+  for (const user of users) {
+    if (user.phone) livePhones.add(normalise(String(user.phone)));
+    if (user.email) liveEmails.add(String(user.email).toLowerCase());
+  }
+
+  const platform = await databases.platform();
+  const directory = platform.collection<DirectoryEntry>('identity_directory');
+
+  // Pass 1 — prune. Entries that reference this society but no longer match any live user are
+  // stale: the person's phone/email changed, or the user was removed. Left alone, they would
+  // keep the old identifier sign-in-able forever (the directory is upsert-only otherwise).
+  const entries = await directory.find({ societyIds: society.id }, { limit: 100_000 });
+  for (const entry of entries) {
+    const matchesLive =
+      (entry.phone != null && livePhones.has(String(entry.phone))) ||
+      (entry.email != null && liveEmails.has(String(entry.email).toLowerCase()));
+    if (matchesLive) continue;
+    const memberships = ((entry.memberships ?? []) as DirectoryMembership[]).filter((m) => m.societyId !== society.id);
+    if (memberships.length === 0) {
+      await directory.deleteOne({ _id: entry._id }, { includeDeleted: true });
+    } else {
+      const societyIds = (entry.societyIds ?? []).filter((s) => s !== society.id);
+      await directory.updateOne({ _id: entry._id }, { $set: { memberships, societyIds } });
+    }
+  }
+
+  // Pass 2 — authoritative upserts from the users collection.
   let count = 0;
   for (const user of users) {
     await upsertMembership({
@@ -162,7 +193,10 @@ export async function rebuildForSociety(
       roles: Array.isArray(user.roles) ? (user.roles as string[]) : [],
       unitIds: Array.isArray(user.unitIds) ? (user.unitIds as string[]) : [],
       status: String(user.status ?? 'ACTIVE'),
-      isActive: user.status === 'ACTIVE',
+      // The account exists; whether it may sign in is the user's status, enforced at login.
+      // Marking PENDING accounts inactive here would hide them from the login endpoint, which
+      // is exactly what made a fresh society's admin sign-in fail with an unexplained 401.
+      isActive: true,
     });
     count += 1;
   }

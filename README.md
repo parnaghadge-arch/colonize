@@ -16,17 +16,29 @@ No Next.js anywhere.
 | Area | State |
 | --- | --- |
 | `packages/shared` | ✅ Complete — shared types, enums, plan tiers, module keys |
-| `backend` | ✅ Complete — 187 OpenAPI paths (100% of implemented routes documented), RBAC, tenant isolation, soft deletes, audit log, transactions |
+| `backend` | ✅ Complete — 188 OpenAPI paths (100% of implemented routes documented), RBAC, tenant isolation, soft deletes, audit log, transactions |
 | Seed data (Green Valley Residency) | ✅ Complete — 5 towers / 20 wings / 800 units / 1500 residents / 50 staff / 10 vendors / 5 gates |
 | §80 acceptance scenario | ✅ Verified end to end — `npm run e2e` → **117/117 checks, 11 scenario groups** |
 | Docker + production env | ✅ Complete — `docker/Dockerfile`, `docker/docker-compose.yml`, `.env.production` |
 | `apps/admin-web`, `apps/super-admin-web` | ✅ Complete — React + Vite consoles (society office / platform) |
 | `apps/resident-mobile`, `apps/security-mobile` | ✅ Complete — Expo (React Native) resident + guard apps |
-| Vitest unit / integration suites | ✅ Complete — 15 files / 370 tests (`npm test -w backend`) |
-| Mobile contract check | ✅ Complete — `npm run contract -w backend` (36 checks) verifies every endpoint the mobile apps call, at any hour of the day |
+| Vitest unit / integration suites | ✅ Complete — 15 files / 376 tests (`npm test -w backend`) |
+| Mobile contract check | ✅ Complete — `npm run contract -w backend` (40 checks) verifies every endpoint the mobile apps call, at any hour of the day |
 | CI (GitHub Actions) | ✅ Complete — `.github/workflows/ci.yml`: build → typecheck → unit tests → seed → live e2e → mobile contract on every push/PR |
 
 The backend is a fully working product surface — every endpoint listed in `/docs` is real, not stubbed.
+
+---
+
+## User manual
+
+[`docs/user-manual.md`](docs/user-manual.md) documents all four clients — the
+super admin console, the society admin console, the resident app and the
+security guard app — with the full data flows (multi-tenant architecture,
+login via the identity directory, onboarding → activation, visitor passes,
+billing, complaints, amenity bookings, layout changes and administrator
+management), a plan/module matrix, and a troubleshooting guide for the
+errors that mean something.
 
 ---
 

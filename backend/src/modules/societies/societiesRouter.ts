@@ -9,6 +9,7 @@ import { ok, created, paginated } from '../../utils/response.js';
 import { ApiError } from '../../utils/errors.js';
 import { databases } from '../../db/manager.js';
 import { syncSubscriptionMirror } from '../../db/seedTenant.js';
+import { invalidateSociety } from '../../services/cache.js';
 import { resolvePlanId } from '../../db/seedPlatform.js';
 import { serialise } from '../../utils/serialize.js';
 import type { Document } from '../../db/drivers/types.js';
@@ -88,6 +89,12 @@ export const createSocietySchema = z.object({
  *    `subscriptions` mirror (see `authenticate`), never from the society document, so setting `tier`
  *    here changed only what this panel displayed while `planId`, limits and the mirror went stale.
  *    Plan changes belong to `PUT /:id/subscription`, which resolves the plan and re-syncs the tenant.
+ *
+ * `layout` and `type` are exceptions to the "display only" rule: they are the physical and
+ * organizational identity of the society. Changing `layout` has one deliberate side effect — the
+ * modules the new layout excludes (a plot society has one street gate, so `multiGate`) are removed
+ * from the society's module set and the tenant mirror is re-synced. Nothing is added back
+ * automatically: re-enable any module from the Plan tab if the layout change was a correction.
  */
 export const updateSocietySchema = z
   .object({
@@ -112,6 +119,8 @@ export const updateSocietySchema = z
     notes: z.string().trim().max(2000).nullable(),
     isFeatured: z.coerce.boolean(),
     onboardingSource: z.string().trim().max(40),
+    layout: z.enum(SOCIETY_LAYOUTS),
+    type: z.string().trim().min(2).max(60),
   })
   .partial()
   .strict();
@@ -307,8 +316,38 @@ router.patch(
     const body = req.body as Record<string, unknown>;
     const update: Record<string, unknown> = { ...body, updatedBy: ctx.principal.userId };
 
+    // Layout change: drop the modules the new layout excludes (a plot society has one street
+    // gate, so `multiGate`). Removed modules are reported back to the operator; nothing is
+    // re-added automatically — the Plan tab is the place to re-enable a module deliberately.
+    let layoutModulesRemoved: string[] = [];
+    if (typeof body.layout === 'string' && body.layout !== String(before.layout ?? 'BUILDING')) {
+      const { modules: remaining, removed } = societiesService.applyLayoutExclusions(
+        (before.modules as string[] | undefined) ?? [],
+        body.layout as (typeof SOCIETY_LAYOUTS)[number],
+      );
+      layoutModulesRemoved = removed;
+      if (removed.length) {
+        update.modules = remaining;
+        update.subscription = { ...((before.subscription as Record<string, unknown> | undefined) ?? {}), modules: remaining };
+      }
+    }
+
     await ctx.platformDatabase.collection('societies').updateOne({ _id: id }, { $set: update });
     const after = await ctx.platformDatabase.collection('societies').findOne({ _id: id });
+
+    // The entitlement middleware reads the module set from the tenant subscription mirror, not
+    // this document — re-sync it so the removed modules stop authorising requests (same reason
+    // the subscription route re-syncs, minus the plan resolution).
+    if (layoutModulesRemoved.length && after!.databaseProvisioned) {
+      const handle = await databases.forSocietyId(id);
+      await syncSubscriptionMirror(handle.db, {
+        societyId: id,
+        slug: String(after!.slug),
+        tier: String(after!.tier),
+        modules: (after!.modules as string[]) ?? [],
+      });
+      invalidateSociety(id);
+    }
 
     await logSystemAudit(ctx.platformDatabase, {
       collection: 'platform_audit_logs',
@@ -319,10 +358,15 @@ router.patch(
       recordType: 'society',
       oldValue: before,
       newValue: after,
+      meta: layoutModulesRemoved.length ? { layoutModulesRemoved } : undefined,
       actor: { id: ctx.principal.userId, name: ctx.principal.email ?? ctx.principal.fullName, type: 'PLATFORM' },
     });
 
-    return ok(res, serialise(after!, { revealContact: true }), 'Society updated');
+    return ok(
+      res,
+      { ...(serialise(after!, { revealContact: true }) as Record<string, unknown>), ...(layoutModulesRemoved.length ? { layoutModulesRemoved } : {}) },
+      layoutModulesRemoved.length ? `Society updated — ${layoutModulesRemoved.join(', ')} disabled for this layout` : 'Society updated',
+    );
   }),
 );
 
@@ -661,6 +705,60 @@ router.post(
       },
       'Administrator created — they can sign in with this phone number or email',
     );
+  }),
+);
+
+export const updateSocietyAdminSchema = z
+  .object({
+    fullName: z.string().trim().min(2).max(80).optional(),
+    email: z.string().trim().email().max(160).nullable().optional(),
+    phone: z.string().trim().max(20).nullable().optional(),
+    roles: z.array(z.string().min(2).max(40)).min(1).max(5).optional(),
+    password: z.string().min(8).max(128).optional(),
+  })
+  .refine((v) => Object.values(v).some((x) => x !== undefined), { message: 'Nothing to update' });
+
+router.patch(
+  '/:id/admins/:userId',
+  requirePermission(permission('society', 'manage'), permission('user', 'update')),
+  validate(updateSocietyAdminSchema),
+  asyncHandler(async (req, res) => {
+    const ctx = requirePlatformContext(req);
+    const societyId = String(req.params.id);
+    const society = await ctx.platformDatabase.collection('societies').findOne({ _id: societyId });
+    if (!society) throw ApiError.notFound('Society');
+    const db = await databases.tenantDb(societyId);
+    const user = await societiesService.updateSocietyAdmin(
+      { db, societyId, actorId: ctx.principal.userId },
+      String(req.params.userId),
+      req.body as never,
+    );
+    return ok(
+      res,
+      {
+        id: user._id,
+        fullName: user.fullName,
+        email: user.email ?? null,
+        phone: user.phone ?? null,
+        roles: user.roles,
+        mustChangePassword: Boolean(user.mustChangePassword),
+      },
+      'Administrator updated — the login directory was re-synced',
+    );
+  }),
+);
+
+router.delete(
+  '/:id/admins/:userId',
+  requirePermission(permission('society', 'manage'), permission('user', 'delete')),
+  asyncHandler(async (req, res) => {
+    const ctx = requirePlatformContext(req);
+    const societyId = String(req.params.id);
+    const society = await ctx.platformDatabase.collection('societies').findOne({ _id: societyId });
+    if (!society) throw ApiError.notFound('Society');
+    const db = await databases.tenantDb(societyId);
+    await societiesService.removeSocietyAdmin({ db, societyId, actorId: ctx.principal.userId }, String(req.params.userId));
+    return ok(res, { removed: true }, 'Administrator removed — they can no longer sign in to this society');
   }),
 );
 

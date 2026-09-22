@@ -19,6 +19,7 @@ import {
   Select,
   Textarea,
   useToast,
+  type Column,
 } from '../components/ui.tsx';
 import { dateTime, day, label, money, number } from '../lib/format.ts';
 import { useSession } from '../lib/session.tsx';
@@ -27,7 +28,10 @@ import {
   MODULE_KEYS,
   PLAN_CODES,
   RENEWAL_MODES,
+  SOCIETY_LAYOUTS,
   SOCIETY_LAYOUT_LABELS,
+  SOCIETY_TYPES,
+  SOCIETY_TYPE_LABELS,
   SOCIETY_STATUSES,
   SUBSCRIPTION_STATUSES,
   type OnboardingState,
@@ -207,7 +211,7 @@ export function SocietyDetailPage() {
       {tab === 'profile' ? <ProfileTab id={id} record={record} editable={canUpdate} /> : null}
       {tab === 'onboarding' ? <OnboardingTab id={id} record={record} editable={canUpdate} /> : null}
       {tab === 'plan' ? <PlanTab id={id} record={record} editable={canSubscription} /> : null}
-      {tab === 'admins' ? <AdminsTab id={id} canInvite={canManage || can('user:create')} /> : null}
+      {tab === 'admins' ? <AdminsTab id={id} canInvite={canManage || can('user:create')} canManage={canManage} /> : null}
       {tab === 'audit' ? <AuditTab id={id} /> : null}
 
       {statusTarget ? (
@@ -350,14 +354,19 @@ function ProfileTab({ id, record, editable }: { id: string; record: SocietyDetai
   }, [record]);
 
   const [form, setForm] = useState<Record<ProfileKey, string> | null>(null);
+  // layout + type are enums, not free text, so they live outside the string form model.
+  const extraBase = { layout: record.layout ?? 'BUILDING', type: record.type ?? 'RESIDENTIAL_SOCIETY' };
+  const [extra, setExtra] = useState<{ layout: string; type: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const values = form ?? baseline;
+  const extraValues = extra ?? extraBase;
 
   const changed = useMemo(
     () => (form ? PROFILE_KEYS.filter((key) => (form[key] ?? '') !== baseline[key]) : []),
     [form, baseline],
   );
+  const extraChanged = Boolean(extra && (extra.layout !== extraBase.layout || extra.type !== extraBase.type));
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -373,9 +382,14 @@ function ProfileTab({ id, record, editable }: { id: string; record: SocietyDetai
         patch[key] = value === '' && NULLABLE.includes(key) ? null : value;
       }
       if (form.notes !== baseline.notes) patch.isFeatured = record.isFeatured ?? false;
-      await api.patch(`/platform/societies/${id}`, patch);
-      toast.success('Society updated');
+      if (extra) {
+        if (extra.layout !== extraBase.layout) patch.layout = extra.layout;
+        if (extra.type !== extraBase.type) patch.type = extra.type;
+      }
+      const result = await api.patch<{ layoutModulesRemoved?: string[] }>(`/platform/societies/${id}`, patch);
+      toast.success(result?.layoutModulesRemoved?.length ? `Society updated — ${result.layoutModulesRemoved.join(', ')} disabled for this layout` : 'Society updated');
       setForm(null);
+      setExtra(null);
     } catch (err) {
       setError(err);
       toast.error(err);
@@ -385,6 +399,7 @@ function ProfileTab({ id, record, editable }: { id: string; record: SocietyDetai
   }
 
   const set = (key: ProfileKey, value: string) => setForm((prev) => ({ ...(prev ?? baseline), [key]: value }));
+  const setExtraField = (key: 'layout' | 'type', value: string) => setExtra((prev) => ({ ...(prev ?? extraBase), [key]: value }));
   const slugValid = /^[a-z0-9-]{3,48}$/.test(values.slug);
 
   return (
@@ -398,16 +413,29 @@ function ProfileTab({ id, record, editable }: { id: string; record: SocietyDetai
           editable ? (
             <div className="row">
               {form ? (
-                <Button size="sm" variant="ghost" onClick={() => setForm(null)}>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    setForm(null);
+                    setExtra(null);
+                  }}
+                >
                   Discard
                 </Button>
               ) : (
-                <Button size="sm" onClick={() => setForm({ ...baseline })}>
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    setForm({ ...baseline });
+                    setExtra({ ...extraBase });
+                  }}
+                >
                   Edit
                 </Button>
               )}
-              <Button size="sm" variant="primary" type="submit" busy={busy} disabled={!form || changed.length === 0 || !slugValid}>
-                Save{changed.length ? ` (${changed.length})` : ''}
+              <Button size="sm" variant="primary" type="submit" busy={busy} disabled={!form || (changed.length === 0 && !extraChanged) || !slugValid}>
+                Save{changed.length + (extraChanged ? 1 : 0) ? ` (${changed.length + (extraChanged ? 1 : 0)})` : ''}
               </Button>
             </div>
           ) : undefined
@@ -493,6 +521,30 @@ function ProfileTab({ id, record, editable }: { id: string; record: SocietyDetai
             <Textarea rows={2} value={values.notes} onChange={(e) => set('notes', e.target.value)} />
           </Field>
         </div>
+
+        <fieldset disabled={!editable || !form} className="grid grid--2" style={{ border: 0, padding: 0, margin: 0 }}>
+          <Field
+            label="Society layout"
+            hint="How the society is physically formed. Changing it to plot/row-house disables the multi-gate module (it cannot be re-added automatically — use the Plan tab)."
+          >
+            <Select value={extraValues.layout} onChange={(e) => setExtraField('layout', e.target.value)}>
+              {SOCIETY_LAYOUTS.map((l) => (
+                <option key={l} value={l}>
+                  {SOCIETY_LAYOUT_LABELS[l]}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Organizational type" hint="The legal form of the society">
+            <Select value={extraValues.type} onChange={(e) => setExtraField('type', e.target.value)}>
+              {SOCIETY_TYPES.map((t) => (
+                <option key={t} value={t}>
+                  {SOCIETY_TYPE_LABELS[t]}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        </fieldset>
       </Card>
     </form>
   );
@@ -881,10 +933,69 @@ function PlanTab({ id, record, editable }: { id: string; record: SocietyDetail; 
 
 /* ---------------------------------- admins ---------------------------------- */
 
-function AdminsTab({ id, canInvite }: { id: string; canInvite: boolean }) {
+function AdminsTab({ id, canInvite, canManage }: { id: string; canInvite: boolean; canManage: boolean }) {
   const toast = useToast();
   const admins = useResource<{ items: SocietyAdmin[] }>(`/platform/societies/${id}/admins`);
   const [inviting, setInviting] = useState(false);
+  const [editing, setEditing] = useState<SocietyAdmin | null>(null);
+  const [removing, setRemoving] = useState<string | null>(null);
+
+  async function remove(admin: SocietyAdmin) {
+    setRemoving(admin.id);
+    try {
+      await api.del(`/platform/societies/${id}/admins/${admin.id}`);
+      toast.success(`${admin.fullName} removed — they can no longer sign in to this society`);
+      setRemoving(null);
+      admins.reload();
+    } catch (err) {
+      setRemoving(null);
+      toast.error(err);
+    }
+  }
+
+  const adminColumns: Array<Column<SocietyAdmin>> = [
+    { key: 'name', header: 'Name', render: (a) => <b>{a.fullName}</b> },
+    { key: 'email', header: 'Email', render: (a) => a.email ?? <span className="faint">—</span> },
+    { key: 'phone', header: 'Phone', render: (a) => a.phone ?? <span className="faint">—</span> },
+    { key: 'roles', header: 'Roles', render: (a) => <span className="small">{(a.roles ?? []).map((r) => label(r)).join(', ')}</span> },
+    {
+      key: 'status',
+      header: 'Status',
+      render: (a) => (
+        <span className="row" style={{ gap: 6 }}>
+          <Pill tone={a.status === 'ACTIVE' ? 'success' : 'warning'}>{label(a.status)}</Pill>
+          {a.mustChangePassword ? <Pill tone="info">Must change password</Pill> : null}
+        </span>
+      ),
+    },
+    { key: 'login', header: 'Last sign-in', render: (a) => <span className="small">{a.lastLoginAt ? dateTime(a.lastLoginAt) : 'Never'}</span> },
+  ];
+  if (canManage) {
+    adminColumns.push({
+      key: 'actions',
+      header: '',
+      align: 'right',
+      render: (a) => (
+        <div className="row" style={{ gap: 6, justifyContent: 'flex-end' }}>
+          <Button size="sm" variant="ghost" onClick={() => setEditing(a)}>
+            Edit
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            busy={removing === a.id}
+            onClick={() => {
+              if (window.confirm(`Remove ${a.fullName} as an administrator of this society? They will no longer be able to sign in.`)) {
+                void remove(a);
+              }
+            }}
+          >
+            Remove
+          </Button>
+        </div>
+      ),
+    });
+  }
 
   return (
     <div className="stack">
@@ -909,23 +1020,7 @@ function AdminsTab({ id, canInvite }: { id: string; canInvite: boolean }) {
             rows={admins.data?.items ?? []}
             rowKey={(a) => a.id}
             empty={<EmptyState title="No administrators" hint="Nobody can sign in to this society's console yet." />}
-            columns={[
-              { key: 'name', header: 'Name', render: (a) => <b>{a.fullName}</b> },
-              { key: 'email', header: 'Email', render: (a) => a.email ?? <span className="faint">—</span> },
-              { key: 'phone', header: 'Phone', render: (a) => a.phone ?? <span className="faint">—</span> },
-              { key: 'roles', header: 'Roles', render: (a) => <span className="small">{(a.roles ?? []).map((r) => label(r)).join(', ')}</span> },
-              {
-                key: 'status',
-                header: 'Status',
-                render: (a) => (
-                  <span className="row" style={{ gap: 6 }}>
-                    <Pill tone={a.status === 'ACTIVE' ? 'success' : 'warning'}>{label(a.status)}</Pill>
-                    {a.mustChangePassword ? <Pill tone="info">Must change password</Pill> : null}
-                  </span>
-                ),
-              },
-              { key: 'login', header: 'Last sign-in', render: (a) => <span className="small">{a.lastLoginAt ? dateTime(a.lastLoginAt) : 'Never'}</span> },
-            ]}
+            columns={adminColumns}
           />
         )}
       </Card>
@@ -941,7 +1036,116 @@ function AdminsTab({ id, canInvite }: { id: string; canInvite: boolean }) {
           }}
         />
       ) : null}
+
+      {editing ? (
+        <EditAdminForm
+          id={id}
+          admin={editing}
+          onClose={() => setEditing(null)}
+          onDone={(message) => {
+            setEditing(null);
+            toast.success(message);
+            admins.reload();
+          }}
+        />
+      ) : null}
     </div>
+  );
+}
+
+function EditAdminForm({
+  id,
+  admin,
+  onClose,
+  onDone,
+}: {
+  id: string;
+  admin: SocietyAdmin;
+  onClose: () => void;
+  onDone: (message: string) => void;
+}) {
+  const [fullName, setFullName] = useState(admin.fullName);
+  const [email, setEmail] = useState(admin.email ?? '');
+  const [phone, setPhone] = useState(admin.phone ?? '');
+  const [roles, setRoles] = useState<string[]>(admin.roles ?? ['SOCIETY_ADMIN']);
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const body: Record<string, unknown> = {
+        fullName: fullName.trim(),
+        email: email.trim() || null,
+        phone: phone.trim() || null,
+        roles,
+      };
+      if (password) body.password = password;
+      await api.patch(`/platform/societies/${id}/admins/${admin.id}`, body);
+      onDone(`${fullName.trim()} updated — the login directory was re-synced`);
+    } catch (err) {
+      setError(err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const hasIdentifier = Boolean(email.trim() || phone.trim());
+
+  return (
+    <Modal
+      title={`Edit administrator — ${admin.fullName}`}
+      onClose={onClose}
+      footer={
+        <>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button variant="primary" busy={busy} onClick={submit} disabled={fullName.trim().length < 2 || roles.length === 0 || !hasIdentifier}>
+            Save changes
+          </Button>
+        </>
+      }
+    >
+      {error ? <ErrorAlert error={error} /> : null}
+      <form onSubmit={submit} className="stack">
+        <Alert tone="info">
+          Changing the <b>email</b> or <b>phone</b> changes how this person signs in — the login
+          directory is re-synced, so the new identifier works on their next attempt. Leave the
+          <b> password blank to keep the current one</b>; set one to reset it.
+        </Alert>
+        <Field label="Full name" required>
+          <Input value={fullName} onChange={(e) => setFullName(e.target.value)} required />
+        </Field>
+        <div className="grid grid--2">
+          <Field label="Email" hint="Either an email or a phone is required to sign in">
+            <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+          </Field>
+          <Field label="Phone">
+            <Input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+91…" />
+          </Field>
+        </div>
+        <Field label="New password (optional)" hint="At least 8 characters. Blank keeps the current password.">
+          <Input value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Leave blank to keep the current password" />
+        </Field>
+        <Field label="Roles" required>
+          <div className="row row--wrap" style={{ gap: 10 }}>
+            {ADMIN_ROLES.map((role) => (
+              <label key={role} className="row" style={{ gap: 6 }}>
+                <input
+                  type="checkbox"
+                  checked={roles.includes(role)}
+                  onChange={(e) => setRoles((prev) => (e.target.checked ? [...prev, role] : prev.filter((r) => r !== role)))}
+                />
+                <span className="small">{label(role)}</span>
+              </label>
+            ))}
+          </div>
+        </Field>
+        {!hasIdentifier ? <Alert tone="warning">Keep at least an email or a phone, otherwise this administrator can no longer sign in.</Alert> : null}
+      </form>
+    </Modal>
   );
 }
 

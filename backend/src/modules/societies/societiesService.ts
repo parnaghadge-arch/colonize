@@ -489,6 +489,109 @@ export async function createSocietyAdmin(ctx: StructureContext, input: Document,
   return user;
 }
 
+/**
+ * What a layout change does to a society's module set: the modules the new layout excludes are
+ * dropped, everything else is kept. Pure, so it is unit-testable and the router's side effects
+ * (mirror re-sync, audit) can be tested against one source of truth.
+ */
+export function applyLayoutExclusions(modules: string[] | undefined, layout: SocietyLayout): { modules: string[]; removed: string[] } {
+  const excluded: string[] = LAYOUT_MODULE_EXCLUSIONS[layout] ?? [];
+  const current = modules ?? [];
+  const removed = current.filter((m) => excluded.includes(m));
+  return { modules: current.filter((m) => !excluded.includes(m)), removed };
+}
+
+/** Find the user an admin-management call refers to, or 404. */
+async function findSocietyAdminUser(ctx: StructureContext, userId: string): Promise<Document> {
+  const user = await ctx.db.collection('users').findById(userId);
+  if (!user || String(user.societyId) !== ctx.societyId) throw ApiError.notFound('Administrator');
+  return user;
+}
+
+/**
+ * Edit an existing society administrator: identity, roles or password.
+ *
+ * The login directory is rebuilt afterwards, because a changed email/phone is a changed login
+ * identifier — the old identifier must stop resolving and the new one must start resolving on
+ * the very next sign-in attempt.
+ */
+export async function updateSocietyAdmin(
+  ctx: StructureContext,
+  userId: string,
+  input: { fullName?: string; email?: string; phone?: string; roles?: string[]; password?: string },
+): Promise<Document> {
+  const user = await findSocietyAdminUser(ctx, userId);
+
+  const update: Document = { updatedBy: ctx.actorId };
+  if (input.fullName !== undefined) update.fullName = input.fullName;
+  if (input.email !== undefined) update.email = input.email || null;
+  if (input.phone !== undefined) update.phone = input.phone ? normalisePhone(String(input.phone)) : null;
+  if (input.roles !== undefined) update.roles = input.roles;
+  if (input.password) {
+    update.passwordHash = await hashPassword(String(input.password));
+    update.isVerified = true;
+    update.mustChangePassword = false;
+  }
+  await ctx.db.collection('users').updateOne({ _id: user._id }, { $set: update });
+
+  const platform = await databases.platform();
+  const society = await platform.collection('societies').findById(ctx.societyId);
+  await rebuildForSociety(ctx.db, { id: ctx.societyId, name: String(society?.name ?? ''), slug: String(society?.slug ?? '') });
+
+  await logSystemAudit(platform, {
+    collection: 'platform_audit_logs',
+    societyId: ctx.societyId,
+    module: 'society',
+    action: 'society.admin.updated',
+    recordId: userId,
+    recordType: 'user',
+    oldValue: user,
+    newValue: { ...user, ...update, passwordHash: undefined },
+    actor: { id: ctx.actorId, name: null, type: 'PLATFORM' },
+  });
+
+  return { ...user, ...update };
+}
+
+/**
+ * Remove an administrator from the society (soft delete — the audit trail keeps the person).
+ *
+ * Guarded: an ACTIVE society that would lose its last administrator is refused, because the
+ * operator could not then re-enter the tenant to fix anything (a replacement can be invited from
+ * this panel at any time, which is why the error says so).
+ */
+export async function removeSocietyAdmin(ctx: StructureContext, userId: string): Promise<void> {
+  const user = await findSocietyAdminUser(ctx, userId);
+
+  const platform = await databases.platform();
+  const society = await platform.collection('societies').findById(ctx.societyId);
+  const adminCount = await ctx.db.collection('users').countDocuments({
+    societyId: ctx.societyId,
+    roles: { $in: SOCIETY_ADMIN_ROLES },
+  });
+  if (society?.status === 'ACTIVE' && adminCount <= 1) {
+    throw new ApiError(
+      'This is the last administrator of an active society — removing them would leave the society with no one who can sign in. Invite a replacement first, then remove this administrator.',
+      'CONFLICT',
+    );
+  }
+
+  await ctx.db.collection('users').deleteOne({ _id: user._id, societyId: ctx.societyId });
+  await rebuildForSociety(ctx.db, { id: ctx.societyId, name: String(society?.name ?? ''), slug: String(society?.slug ?? '') });
+  await refreshSocietyCounters(ctx.societyId);
+
+  await logSystemAudit(platform, {
+    collection: 'platform_audit_logs',
+    societyId: ctx.societyId,
+    module: 'society',
+    action: 'society.admin.removed',
+    recordId: userId,
+    recordType: 'user',
+    oldValue: user,
+    actor: { id: ctx.actorId, name: null, type: 'PLATFORM' },
+  });
+}
+
 /* ------------------------------ activation --------------------------------- */
 
 /**
@@ -537,10 +640,9 @@ export async function activateSociety(ctx: SocietiesContext, societyId: string):
   invalidateSociety(societyId);
 
   // Sign-in resolves identifiers through the platform identity directory, not the tenant `users`
-  // collection. An administrator created during onboarding is registered there with
-  // `isActive: false` (deliberately: they must not reach a half-built society), so flipping only the
-  // user document left the directory saying "inactive" and the new administrator could not sign in
-  // even though activation had succeeded. Re-sync it from the users collection.
+  // collection. Onboarding registers administrators there as resolvable from creation time (the
+  // PENDING user status is the gate), but roles/unit data may have drifted since — re-sync from
+  // the users collection so the next sign-in sees the authoritative state.
   await rebuildForSociety(db, { id: societyId, name: String(society.name), slug: String(society.slug) });
 
   await logSystemAudit(platform, {
