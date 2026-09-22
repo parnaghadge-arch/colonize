@@ -99,6 +99,17 @@ export function AppShell() {
             <span className="pill pill--brand" title="Platform tokens carry no society context">
               {user?.permissions.length ?? 0} permissions
             </span>
+            <Button
+              size="sm"
+              variant="ghost"
+              busy={loggingOut}
+              onClick={() => {
+                setLoggingOut(true);
+                logout();
+              }}
+            >
+              Sign out
+            </Button>
           </div>
         </header>
         <main className="content">

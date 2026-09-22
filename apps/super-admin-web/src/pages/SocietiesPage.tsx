@@ -21,7 +21,7 @@ import {
 } from '../components/ui.tsx';
 import { day, label, number } from '../lib/format.ts';
 import { useSession } from '../lib/session.tsx';
-import { ADMIN_ROLES, PLAN_CODES, SOCIETY_STATUSES, type Society } from '../lib/types.ts';
+import { ADMIN_ROLES, PLAN_CODES, SOCIETY_LAYOUTS, SOCIETY_LAYOUT_LABELS, SOCIETY_STATUSES, type Society } from '../lib/types.ts';
 
 const SORTS = [
   { value: 'createdAt', label: 'Newest first' },
@@ -225,7 +225,7 @@ export function SocietiesPage() {
             toast.success(
               admin?.mustChangePassword
                 ? `${society.name} created. ${admin.fullName ?? 'The administrator'} has no password yet — they must set one before signing in.`
-                : `${society.name} created — its database is being provisioned`,
+                : `${society.name} created — it will appear on the administrator's account list once you activate it. Activate needs at least one unit and one administrator.`,
             );
             navigate(`/societies/${society._id}`);
           }}
@@ -253,6 +253,7 @@ interface CreateForm {
   contactPhone: string;
   websiteUrl: string;
   tier: string;
+  layout: string;
   notes: string;
   adminFullName: string;
   adminEmail: string;
@@ -277,6 +278,7 @@ const EMPTY_FORM: CreateForm = {
   contactPhone: '',
   websiteUrl: '',
   tier: 'FREE',
+  layout: 'BUILDING',
   notes: '',
   adminFullName: '',
   adminEmail: '',
@@ -320,6 +322,7 @@ function CreateSocietyForm({
         timezone: form.timezone,
         currency: form.currency.trim() || 'INR',
         tier: form.tier,
+        layout: form.layout,
       };
       // Only send the optional strings the operator actually filled in. The schema is strict about
       // formats — an empty `websiteUrl` is a 422, not a blank field.
@@ -445,6 +448,18 @@ function CreateSocietyForm({
               {PLAN_CODES.map((t) => (
                 <option key={t} value={t}>
                   {label(t)}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field
+            label="Society layout"
+            hint="How the units are physically organised. A plot society is formed with one street gate, so the multi-gate module is not seeded — modules stay editable afterwards."
+          >
+            <Select value={form.layout} onChange={(e) => set('layout', e.target.value)}>
+              {SOCIETY_LAYOUTS.map((l) => (
+                <option key={l} value={l}>
+                  {SOCIETY_LAYOUT_LABELS[l]}
                 </option>
               ))}
             </Select>

@@ -14,6 +14,7 @@ import type { StructureContext } from '../../src/modules/structure/structureServ
 import { loadSocietyById, loadSocietyBySlug } from '../../src/middleware/authenticate.js';
 import { findByIdentifier } from '../../src/services/identityDirectory.js';
 import { hashPassword } from '../../src/services/crypto.js';
+import { loginWithPassword } from '../../src/modules/auth/authService.js';
 
 /**
  * Society lifecycle: create → provision → administrator → activate → suspend → reinstate.
@@ -25,10 +26,11 @@ import { hashPassword } from '../../src/services/crypto.js';
  *  1. **Activation deadlock.** `activateSociety` required at least one *already active* user, but
  *     the onboarding wizard creates the first administrator PENDING and relies on activation to
  *     flip them. Every society created through the panel was therefore permanently unactivatable.
- *  2. **Stale login directory.** Sign-in resolves identifiers through the platform identity
- *     directory, not the tenant `users` collection. Activation flipped the user document and left
- *     the directory entry saying `isActive: false`, so the new administrator could not sign in
- *     even though activation had reported success.
+ *  2. **Login directory gating.** Sign-in resolves identifiers through the platform identity
+ *     directory, not the tenant `users` collection. The entry is registered resolvable at
+ *     creation time — the USER's PENDING status is the real gate, and activation refreshes the
+ *     entry. Registering the entry inactive until activation made pre-activation sign-in fail
+ *     with a generic "Invalid credentials" and no hint of what was missing.
  *  3. **Unenforced suspension.** `authenticate` rejects a non-ACTIVE society on every request, but
  *     `invalidateSociety` dropped prefixes that did not match the keys `loadSocietyById` writes
  *     (`soc:id:<id>`, not `soc:<id>`), and status changes never invalidated at all — so a suspended
@@ -150,12 +152,15 @@ describe('society activation', () => {
   });
 
   it('makes the new administrator resolvable through the login directory', async () => {
-    // Sign-in looks the identifier up in the platform directory. Registering an onboarding
-    // administrator as inactive and never refreshing that entry left them unable to sign in after
-    // a successful activation, with no error anywhere to explain why.
+    // Sign-in looks the identifier up in the platform directory. The entry must be registered —
+    // and resolvable — the moment the administrator is created: the USER's PENDING status is what
+    // gates a half-built society, and the login endpoint is the only place that can explain WHY
+    // sign-in fails. Hiding the membership until activation produced a generic "Invalid
+    // credentials" with no hint of what the operator still had to do.
     const { id, db } = await newSociety('directory');
     const email = 'directory@lifecycle.test';
     const phone = '+919800001234';
+    const device = { deviceId: 'test-device', platform: 'test' } as never;
     await createSocietyAdmin(
       structureCtx(id, db),
       { fullName: 'Directory Admin', email, phone, password: 'Lifecycle@1234', roles: ['SOCIETY_ADMIN'] },
@@ -163,9 +168,13 @@ describe('society activation', () => {
     );
     await seedUnit(id, db);
 
-    const stale = await findByIdentifier(email);
-    const staleMembership = stale?.memberships?.find((m) => m.societyId === id);
-    expect(staleMembership?.isActive).toBe(false);
+    const early = await findByIdentifier(email);
+    expect(early?.memberships?.find((m) => m.societyId === id)?.isActive).toBe(true);
+
+    // Still blocked before activation — but the endpoint says why.
+    await expect(loginWithPassword(email, 'Lifecycle@1234', device)).rejects.toMatchObject({
+      code: 'SOCIETY_NOT_ACTIVATED',
+    });
 
     await activateSociety(ctx, id);
 
@@ -173,6 +182,10 @@ describe('society activation', () => {
     const byPhone = await findByIdentifier(phone);
     expect(byEmail?.memberships?.find((m) => m.societyId === id)?.isActive).toBe(true);
     expect(byPhone?.memberships?.find((m) => m.societyId === id)?.isActive).toBe(true);
+
+    // Activation flips the PENDING user to ACTIVE and the same credentials now sign in.
+    const outcome = await loginWithPassword(email, 'Lifecycle@1234', device);
+    expect(outcome.kind).toBe('success');
   });
 
   it('exposes the role list the activation guard and admin listing share', () => {

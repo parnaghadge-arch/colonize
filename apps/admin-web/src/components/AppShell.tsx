@@ -166,6 +166,17 @@ export function AppShell() {
           </div>
           <div className="topbar__actions">
             <PlanBadge />
+            <Button
+              size="sm"
+              variant="ghost"
+              busy={loggingOut}
+              onClick={async () => {
+                setLoggingOut(true);
+                await logout();
+              }}
+            >
+              Sign out
+            </Button>
           </div>
         </header>
         <main className="content">

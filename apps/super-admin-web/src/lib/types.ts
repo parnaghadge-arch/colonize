@@ -26,6 +26,21 @@ export type PlanCode = (typeof PLAN_CODES)[number];
 export const SOCIETY_STATUSES = ['ONBOARDING', 'ACTIVE', 'SUSPENDED', 'INACTIVE', 'ARCHIVED'] as const;
 export type SocietyStatus = (typeof SOCIETY_STATUSES)[number];
 
+/**
+ * What the society physically is — Building / Plot-row house / Both. Chosen at onboarding and
+ * stored on the society document; it drives which modules get seeded (a plot society has one
+ * street gate, so `multiGate` is dropped) and how the platform pre-fills the structure step.
+ * Mirrors `SOCIETY_LAYOUTS` in @colonize/shared.
+ */
+export const SOCIETY_LAYOUTS = ['BUILDING', 'PLOT', 'MIXED'] as const;
+export type SocietyLayout = (typeof SOCIETY_LAYOUTS)[number];
+
+export const SOCIETY_LAYOUT_LABELS: Record<SocietyLayout, string> = {
+  BUILDING: 'Building (towers / apartments)',
+  PLOT: 'Plot / row house',
+  MIXED: 'Both (mixed development)',
+};
+
 export const SUBSCRIPTION_STATUSES = ['TRIAL', 'ACTIVE', 'PAST_DUE', 'CANCELLED', 'EXPIRED', 'SUSPENDED'] as const;
 
 export const RENEWAL_MODES = ['MONTHLY', 'QUARTERLY', 'ANNUAL'] as const;
@@ -70,6 +85,8 @@ export interface Society {
   registrationNumber?: string | null;
   status: string;
   tier?: string | null;
+  layout?: string | null;
+  type?: string | null;
   modules?: string[];
   city?: string | null;
   state?: string | null;

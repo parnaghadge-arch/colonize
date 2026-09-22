@@ -27,9 +27,11 @@ import {
   MODULE_KEYS,
   PLAN_CODES,
   RENEWAL_MODES,
+  SOCIETY_LAYOUT_LABELS,
   SOCIETY_STATUSES,
   SUBSCRIPTION_STATUSES,
   type OnboardingState,
+  type SocietyLayout,
   type PlatformAuditLog,
   type SocietyAdmin,
   type SocietyDetail,
@@ -112,6 +114,11 @@ export function SocietyDetailPage() {
             <div className="row" style={{ gap: 6, marginTop: 8 }}>
               <Pill tone={isActive ? 'success' : record.status === 'SUSPENDED' ? 'danger' : 'warning'}>{label(record.status)}</Pill>
               <Pill tone={record.tier === 'ENTERPRISE' ? 'brand' : undefined}>{label(record.tier ?? 'FREE')}</Pill>
+              {record.layout ? (
+                <span title="Physical layout — chosen at onboarding; drives which modules were seeded">
+                  <Pill>{SOCIETY_LAYOUT_LABELS[record.layout as SocietyLayout] ?? label(record.layout)}</Pill>
+                </span>
+              ) : null}
               <Pill tone={provisioned ? 'success' : 'danger'}>{provisioned ? 'Database provisioned' : 'Database missing'}</Pill>
               <code className="small faint">{record.databaseName ?? '—'}</code>
             </div>
@@ -270,6 +277,7 @@ function OverviewTab({ id, record }: { id: string; record: SocietyDetail }) {
             <Card title="Structure">
               <KeyValue
                 items={[
+                  ['Layout', record.layout ? (SOCIETY_LAYOUT_LABELS[record.layout as SocietyLayout] ?? label(record.layout)) : '—'],
                   ['Buildings', number(record.totalBuildings ?? 0)],
                   ['Wings', number(record.totalWings ?? 0)],
                   ['Units', number(record.totalUnits ?? 0)],
@@ -503,17 +511,31 @@ function OnboardingTab({ id, record, editable }: { id: string; record: SocietyDe
   const checklist = state?.checklist ?? [];
   const done = checklist.filter((c) => c.done).length;
   const blockers = checklist.filter((c) => !c.done && c.required);
+  const [plotCount, setPlotCount] = useState('');
+  // A plot/row-house society has no towers — its structure is "N plots", which the operator
+  // types as a single number instead of a building declaration.
+  const isPlotLayout = record.layout === 'PLOT' || record.layout === 'MIXED';
 
   async function advance(event: FormEvent) {
     event.preventDefault();
     setBusy(true);
     try {
+      const payload: Record<string, unknown> =
+        step === 'STRUCTURE' && Number(plotCount) > 0
+          ? { buildings: [{ name: 'Plots', code: 'PLOTS', totalFloors: 1, unitsPerFloor: Number(plotCount), unitPrefix: 'PH' }] }
+          : {};
       const result = await api.post<Record<string, unknown>>(`/platform/societies/${id}/onboarding`, {
         step,
-        payload: {},
+        payload,
         dryRun,
       });
-      toast.success(dryRun ? `Dry run: ${JSON.stringify(result).slice(0, 160)}` : `Onboarding step ${label(step)} recorded`);
+      toast.success(
+        dryRun
+          ? `Dry run: ${JSON.stringify(result).slice(0, 160)}`
+          : step === 'STRUCTURE' && Number(result.unitsCreated ?? 0) > 0
+            ? `Onboarding step ${label(step)} recorded — ${number(Number(result.unitsCreated))} units created`
+            : `Onboarding step ${label(step)} recorded`,
+      );
       if (!dryRun) onboarding.reload();
     } catch (err) {
       toast.error(err);
@@ -589,6 +611,18 @@ function OnboardingTab({ id, record, editable }: { id: string; record: SocietyDe
                     ))}
                   </Select>
                 </Field>
+                {step === 'STRUCTURE' && isPlotLayout ? (
+                  <Field
+                    label="Plots"
+                    hint={
+                      record.layout === 'PLOT'
+                        ? 'Creates a single "Plots" building: one unit per plot, numbered PH1, PH2, …'
+                        : 'Creates a "Plots" building alongside any towers (units PH1, PH2, …)'
+                    }
+                  >
+                    <Input type="number" min={1} max={10000} value={plotCount} onChange={(e) => setPlotCount(e.target.value)} placeholder="e.g. 42" style={{ width: 120 }} />
+                  </Field>
+                ) : null}
                 <label className="row" style={{ gap: 6, paddingBottom: 8 }}>
                   <input type="checkbox" checked={dryRun} onChange={(e) => setDryRun(e.target.checked)} />
                   <span className="small">Dry run</span>

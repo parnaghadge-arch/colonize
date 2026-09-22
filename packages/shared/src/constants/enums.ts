@@ -3,6 +3,8 @@
  * Kept in one place so a status change never has to be made twice.
  */
 
+import type { ModuleKey } from './index.js';
+
 export const SOCIETY_STATUS = ['DRAFT', 'ONBOARDING', 'ACTIVE', 'SUSPENDED', 'ARCHIVED'] as const;
 export type SocietyStatus = (typeof SOCIETY_STATUS)[number];
 
@@ -15,6 +17,29 @@ export const SOCIETY_TYPES = [
   'MIXED_USE',
 ] as const;
 export type SocietyType = (typeof SOCIETY_TYPES)[number];
+
+/**
+ * Physical layout of the development — how the society is formed:
+ *  • BUILDING — towers/apartments: buildings → wings → floors → units, multi-gate, full module set
+ *  • PLOT     — plots / row houses: flat plot structure (one "Plots" building, no wings/floors),
+ *               single main gate, so the multi-gate module is off by default (re-enable per society)
+ *  • MIXED    — both in one development: full structure and module set
+ */
+export const SOCIETY_LAYOUTS = ['BUILDING', 'PLOT', 'MIXED'] as const;
+export type SocietyLayout = (typeof SOCIETY_LAYOUTS)[number];
+
+export const SOCIETY_LAYOUT_LABELS: Record<SocietyLayout, string> = {
+  BUILDING: 'Building (towers / apartments)',
+  PLOT: 'Plot / row house',
+  MIXED: 'Both (mixed development)',
+};
+
+/** Modules that do not apply to a flat plot/row-house layout. Per-society modules are editable, so this is a default, not a lock. */
+export const LAYOUT_MODULE_EXCLUSIONS: Record<SocietyLayout, ModuleKey[]> = {
+  BUILDING: [],
+  PLOT: ['multiGate'],
+  MIXED: [],
+};
 
 export const UNIT_STATUS = ['VACANT', 'OCCUPIED', 'LOCKED', 'UNDER_MAINTENANCE'] as const;
 export type UnitStatus = (typeof UNIT_STATUS)[number];

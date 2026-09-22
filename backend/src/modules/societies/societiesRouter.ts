@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { DEFAULT_TIER_MODULES, PLAN_TIERS, permission, type ModuleKey } from '@colonize/shared';
+import { DEFAULT_TIER_MODULES, PLAN_TIERS, SOCIETY_LAYOUTS, permission, type ModuleKey } from '@colonize/shared';
 import { authenticatePlatform, requirePlatformContext } from '../../middleware/authenticate.js';
 import { requirePermission } from '../../middleware/permissions.js';
 import { asyncHandler } from '../../middleware/errors.js';
@@ -56,6 +56,8 @@ export const createSocietySchema = z.object({
   // nonexistent ones that then failed the plan lookup with a 500.
   z.enum(PLAN_TIERS).default('FREE'),
   modules: z.array(z.string().min(2).max(40)).max(60).optional(),
+  layout: z.enum(SOCIETY_LAYOUTS).default('BUILDING'),
+  type: z.string().trim().max(60).optional(),
   onboardingSource: z.string().trim().max(40).optional(),
   admin: z
     .object({

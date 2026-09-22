@@ -1,12 +1,14 @@
 import {
   DEFAULT_ROLE_PERMISSIONS,
   DEFAULT_TIER_MODULES,
+  LAYOUT_MODULE_EXCLUSIONS,
   MODULE_KEYS,
   ROLE_LABELS,
   ROLE_SCOPE,
   expandPermissions,
   normalisePhone,
   type ModuleKey,
+  type SocietyLayout,
 } from '@colonize/shared';
 import { databases } from '../../db/manager.js';
 import type { Document, TenantDatabase } from '../../db/drivers/types.js';
@@ -62,6 +64,10 @@ export interface CreateSocietyInput {
   websiteUrl?: string;
   tier?: SubscriptionTier;
   modules?: ModuleKey[];
+  /** Physical layout — how the society is formed and which modules start enabled. */
+  layout?: SocietyLayout;
+  /** Organizational type (legal form of the society). */
+  type?: string;
   onboardingSource?: string;
 }
 
@@ -73,7 +79,12 @@ export async function createSociety(ctx: SocietiesContext, input: CreateSocietyI
   const id = newId('societies');
   const databaseName = `clnz_${slug.replace(/[^a-z0-9]/g, '_').slice(0, 48)}`;
   const tier: SubscriptionTier = input.tier ?? 'FREE';
-  const modules = (input.modules?.length ? input.modules : DEFAULT_TIER_MODULES[tier]) as ModuleKey[];
+  const layout: SocietyLayout = input.layout ?? 'BUILDING';
+  const excluded = LAYOUT_MODULE_EXCLUSIONS[layout] ?? [];
+  const baseModules = (input.modules?.length ? input.modules : DEFAULT_TIER_MODULES[tier]) as ModuleKey[];
+  // A plot/row-house society is formed without the modules that only make sense in a
+  // multi-tower, multi-gate development (re-enable any of them later per society).
+  const modules = baseModules.filter((m) => !excluded.includes(m));
   const now = new Date();
   const trialEnd = new Date(now.getTime() + 30 * 86_400_000);
 
@@ -86,6 +97,8 @@ export async function createSociety(ctx: SocietiesContext, input: CreateSocietyI
     registrationNumber: input.registrationNumber ?? null,
     status: 'ONBOARDING',
     tier,
+    layout,
+    type: input.type ?? 'RESIDENTIAL_SOCIETY',
     modules,
     city: input.city ?? '',
     state: input.state ?? null,
@@ -144,7 +157,7 @@ export async function createSociety(ctx: SocietiesContext, input: CreateSocietyI
     action: 'society.created',
     recordId: id,
     recordType: 'society',
-    newValue: { name, slug, tier, databaseName },
+    newValue: { name, slug, tier, layout, databaseName },
     meta: { onboardingSource: society.onboardingSource },
     actor: { id: ctx.actorId, name: ctx.actorName ?? null, type: 'PLATFORM' },
   });
@@ -377,21 +390,37 @@ export async function createSocietyAdmin(ctx: StructureContext, input: Document,
   const email = input.email ? String(input.email).toLowerCase().trim() : null;
   if (!phone && !email) throw ApiError.badRequest('An administrator needs a phone number or an email address');
 
-  const existing = await ctx.db.collection('users').findOne({
-    societyId: ctx.societyId,
-    ...(phone ? { phone } : { email }),
-  });
-
-  if (existing) {
-    const roles = Array.from(new Set([...((existing.roles as string[]) ?? []), ...((input.roles as string[]) ?? ['SOCIETY_ADMIN'])]));
-    await ctx.db.collection('users').updateOne({ _id: existing._id }, { $set: { roles, isActive: opts.activate !== false } });
-    return existing;
-  }
-
-  const passwordHash = input.password ? await hashPassword(String(input.password)) : null;
-  const userId = newId('users');
   const roles = ((input.roles as string[]) ?? ['SOCIETY_ADMIN']) as string[];
-  const user = await ctx.db.collection('users').create({
+
+  // Look up by phone first, then email: a re-run of the ADMIN step or a re-invite may match the
+  // existing account on either identifier.
+  let existing = phone ? await ctx.db.collection('users').findOne({ societyId: ctx.societyId, phone }) : null;
+  if (!existing && email) existing = await ctx.db.collection('users').findOne({ societyId: ctx.societyId, email });
+
+  let user: Document;
+  if (existing) {
+    // The account already exists (onboarding re-run, re-invite with a corrected password). Merge
+    // the roles and apply the new password when one is supplied — silently keeping the old
+    // password was how "created an administrator, but login says invalid credentials" happened.
+    const update: Document = {
+      roles: Array.from(new Set([...((existing.roles as string[]) ?? []), ...roles])),
+      isActive: opts.activate !== false,
+      updatedBy: ctx.actorId,
+    };
+    if (input.fullName) update.fullName = String(input.fullName);
+    if (phone) update.phone = phone;
+    if (email) update.email = email;
+    if (input.password) {
+      update.passwordHash = await hashPassword(String(input.password));
+      update.isVerified = true;
+      update.mustChangePassword = false;
+    }
+    await ctx.db.collection('users').updateOne({ _id: existing._id }, { $set: update });
+    user = { ...existing, ...update };
+  } else {
+    const passwordHash = input.password ? await hashPassword(String(input.password)) : null;
+    const userId = newId('users');
+    user = await ctx.db.collection('users').create({
     _id: userId,
     societyId: ctx.societyId,
     fullName: String(input.fullName ?? 'Administrator'),
@@ -411,10 +440,11 @@ export async function createSocietyAdmin(ctx: StructureContext, input: Document,
     mustChangePassword: !passwordHash,
     pushTokens: [],
     preferences: {},
-    createdSource: 'onboarding',
-    createdBy: ctx.actorId,
-    updatedBy: ctx.actorId,
-  });
+      createdSource: 'onboarding',
+      createdBy: ctx.actorId,
+      updatedBy: ctx.actorId,
+    });
+  }
 
   // Materialise the default permission set into the society's own roles collection so an
   // administrator can later tweak individual permissions without a code change (§52).
@@ -426,7 +456,7 @@ export async function createSocietyAdmin(ctx: StructureContext, input: Document,
   // the first, because `role` was left unset on all of them.
   const roleDocs = await ctx.db.collection('roles').find({ societyId: ctx.societyId }, { limit: 200 });
   const existingRoles = new Set(roleDocs.map((r) => String(r.role)));
-  for (const role of roles) {
+  for (const role of (user.roles as string[]) ?? roles) {
     if (existingRoles.has(role)) continue;
     await ctx.db.collection('roles').create({
       _id: newId('roles'),
@@ -443,11 +473,16 @@ export async function createSocietyAdmin(ctx: StructureContext, input: Document,
     });
   }
 
-  // Register in the cross-society login directory so this person can sign in immediately.
+  // Register in the cross-society login directory so this person can sign in as soon as the
+  // society is live. Runs on the re-run path too: an earlier creation may have registered only
+  // one identifier. `isActive` marks the membership itself (revocation is what flips it false) —
+  // a not-yet-activated society's admin is gated by the USER's PENDING status, which
+  // `successOutcome` rejects, so the membership must still be resolvable or the login endpoint
+  // cannot explain WHY sign-in fails.
   const society = await (await databases.platform()).collection('societies').findById(ctx.societyId);
   const societyName = String(society?.name ?? '');
   const societySlug = String(society?.slug ?? '');
-  const membershipBase = { societyId: ctx.societyId, societyName, societySlug, userId, roles, unitIds: [], isActive: opts.activate !== false };
+  const membershipBase = { societyId: ctx.societyId, societyName, societySlug, userId: String(user._id), roles: (user.roles as string[]) ?? roles, unitIds: [], isActive: true };
   if (phone) await upsertMembership({ ...membershipBase, phone });
   if (email) await upsertMembership({ ...membershipBase, email });
 

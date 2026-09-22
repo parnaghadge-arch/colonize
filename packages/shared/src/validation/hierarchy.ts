@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   SOCIETY_STATUS,
   SOCIETY_TYPES,
+  SOCIETY_LAYOUTS,
   UNIT_STATUS,
   UNIT_TYPES,
   OCCUPANCY_TYPES,
@@ -36,6 +37,8 @@ export const createSocietySchema = z.object({
     .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, 'Use lowercase letters, numbers and dashes only')
     .optional(),
   type: z.enum(SOCIETY_TYPES).default('RESIDENTIAL_SOCIETY'),
+  /** Physical layout — how the society is formed and which modules start enabled. */
+  layout: z.enum(SOCIETY_LAYOUTS).default('BUILDING'),
   registrationNumber: z.string().trim().max(80).optional(),
   address: addressSchema.optional(),
   city: z.string().trim().max(80).optional(),

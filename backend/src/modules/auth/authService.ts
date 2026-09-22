@@ -325,14 +325,26 @@ export async function loginWithPassword(
   }
 
   const verified: ResolvedMembership[] = [];
+  // Distinguish "wrong password" from the two states that also surface as a plain 401 but mean
+  // something else entirely (a fresh society's administrator cannot sign in until activation):
+  let pendingWithCorrectPassword: string | null = null;
+  let accountWithoutPassword: string | null = null;
   for (const membership of memberships) {
     try {
       const db = await tenantFor(membership);
       const user = await db.collection('users').findById(membership.userId);
-      if (!user || user.status !== 'ACTIVE') continue;
-      if (!user.passwordHash) continue;
+      if (!user) continue;
+      if (!user.passwordHash) {
+        accountWithoutPassword = membership.societyName;
+        continue;
+      }
       const okPassword = await verifyPassword(password, String(user.passwordHash));
-      if (okPassword) verified.push(membership);
+      if (!okPassword) continue;
+      if (user.status !== 'ACTIVE') {
+        pendingWithCorrectPassword = membership.societyName;
+        continue;
+      }
+      verified.push(membership);
     } catch (err) {
       logger.warn({ err: (err as Error).message, societyId: membership.societyId }, 'auth: membership check failed');
     }
@@ -341,6 +353,18 @@ export async function loginWithPassword(
   if (verified.length === 0) {
     // Record the failure against the first membership's society for auditing.
     await recordFailedLogin(memberships[0] as ResolvedMembership, identifier);
+    if (accountWithoutPassword) {
+      throw new ApiError(
+        `The account for ${accountWithoutPassword} has no password set yet. The platform operator can set one by re-inviting this person from the society's Administrators panel.`,
+        'PASSWORD_NOT_SET',
+      );
+    }
+    if (pendingWithCorrectPassword) {
+      throw new ApiError(
+        `${pendingWithCorrectPassword} is still being set up — an administrator can only sign in after the platform operator activates the society (it needs at least one unit and one administrator).`,
+        'SOCIETY_NOT_ACTIVATED',
+      );
+    }
     throw ApiError.unauthenticated('Invalid credentials');
   }
   if (verified.length > 1) return selectionOutcome(identifier, verified, device);
