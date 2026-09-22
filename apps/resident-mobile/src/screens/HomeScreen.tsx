@@ -6,7 +6,7 @@
 import React, { useCallback, useState } from 'react';
 import { Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 
-import { Alert, Button, Card, EmptyState, Loading, Screen, ScreenTitle, StatusChip, colors } from '../components/ui.tsx';
+import { Alert, Button, Card, EmptyState, Loading, Screen, ScreenTitle, SocietyBadge, StatusChip, colors } from '../components/ui.tsx';
 import { api, fetchPage } from '../lib/api.ts';
 import { formatDateTime, formatMoney, initials } from '../lib/format.ts';
 import { useSession } from '../lib/session.tsx';
@@ -69,7 +69,8 @@ export function HomeScreen({ navigation }: Props) {
   return (
     <Screen>
       <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.brand} />
-      <ScreenTitle title={`${greeting}, ${who?.user?.fullName?.split(' ')[0] ?? 'there'}`} subtitle={who?.society?.name} />
+      {who?.society ? <SocietyBadge name={who.society.name} logoUrl={who.society.logoUrl} /> : null}
+      <ScreenTitle title={`${greeting}, ${who?.user?.fullName?.split(' ')[0] ?? 'there'}`} />
 
       {error ? <Alert tone="error">{error}</Alert> : null}
       {loading ? (

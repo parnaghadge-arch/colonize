@@ -61,8 +61,44 @@ async function main() {
   const who = await call('GET', '/whoami', { token: rToken, societyId });
   check('whoami', who.status === 200 && who.json?.data?.user?.fullName, JSON.stringify(who.json)?.slice(0, 200));
   check('whoami society currency', Boolean(who.json?.data?.society?.currency));
+  check('whoami society exposes logoUrl', who.json?.data?.society && 'logoUrl' in who.json.data.society, JSON.stringify(who.json?.data?.society));
   const primaryUnit = who.json?.data?.membership?.primaryUnitId;
   check('whoami primary unit', Boolean(primaryUnit));
+
+  // --- society logo contract: the login screen renders it unauthenticated, and the server
+  // --- guarantees a square even when the upload is not one.
+  console.log('== society logo ==');
+  const pLogin = await call('POST', '/auth/platform/login', { body: { identifier: 'superadmin@colonize.local', password: 'Colonize@Super1' } });
+  const pToken = pLogin.json?.data?.accessToken;
+  check('platform login (for logo upload)', Boolean(pToken), JSON.stringify(pLogin.json)?.slice(0, 120));
+  // A deliberately non-square PNG (3×5) — the server must still return a 512×512 square.
+  const sharp = (await import('sharp')).default;
+  const tinyPng = Buffer.from(await sharp({ create: { width: 3, height: 5, channels: 3, background: { r: 200, g: 30, b: 30 } } }).png().toBuffer());
+  const fd = new FormData();
+  fd.append('logo', new Blob([tinyPng], { type: 'image/png' }), 'tiny.png');
+  const upRes = await fetch(BASE + '/platform/uploads/logo', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${pToken ?? ''}` },
+    body: fd,
+  });
+  const upText = await upRes.text();
+  const upJson = upText ? JSON.parse(upText) : null;
+  check('logo upload → 201 with 512×512', upRes.status === 201 && upJson?.data?.width === 512 && upJson?.data?.height === 512, upText.slice(0, 200));
+  const logoUrl = upJson?.data?.url;
+  if (logoUrl) {
+    // The stored url already carries the /api prefix — anchor it at the server origin, not at BASE.
+    const logoRes = await fetch(new URL(logoUrl, BASE.replace(/\/api$/, '')).toString(), { headers: { Accept: 'image/*' } }); // deliberately no token
+    const buf = Buffer.from(await logoRes.arrayBuffer());
+    const pngOk = buf.length > 24 && buf.subarray(1, 4).toString() === 'PNG';
+    const size = pngOk ? [buf.readUInt32BE(16), buf.readUInt32BE(20)] : [0, 0];
+    check('logo served unauthenticated as image', logoRes.status === 200 && String(logoRes.headers.get('content-type')).startsWith('image/'), `${logoRes.status} ${logoRes.headers.get('content-type')}`);
+    check('logo is a square on disk', pngOk && size[0] === 512 && size[1] === 512, size.join('x'));
+    check('logo carries immutable cache header', String(logoRes.headers.get('cache-control')).includes('immutable'), String(logoRes.headers.get('cache-control')));
+  } else {
+    check('logo served unauthenticated as image', false, 'no logo url');
+    check('logo is a square on disk', false, 'no logo url');
+    check('logo carries immutable cache header', false, 'no logo url');
+  }
 
   // Admin (society office) — used to generate a bill so the payment flow is exercised.
   const aLogin = await call('POST', '/auth/login', { body: { identifier: 'admin@greenvalley.local', password: 'GreenValley@1' } });

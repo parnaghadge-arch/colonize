@@ -21,6 +21,7 @@ import {
   useToast,
   type Column,
 } from '../components/ui.tsx';
+import { SocietyLogo } from '../components/SocietyLogo.tsx';
 import { dateTime, day, label, money, number } from '../lib/format.ts';
 import { useSession } from '../lib/session.tsx';
 import {
@@ -110,7 +111,10 @@ export function SocietyDetailPage() {
                 ← All societies
               </Link>
             </div>
-            <h2 style={{ margin: '4px 0' }}>{record.name}</h2>
+            <div className="row" style={{ gap: 10, alignItems: 'center' }}>
+              <SocietyLogo logoUrl={record.logoUrl} name={record.name} size={44} />
+              <h2 style={{ margin: 0 }}>{record.name}</h2>
+            </div>
             <div className="faint small">
               {record.legalName ?? record.slug} · {record.city ?? '—'}
               {record.state ? `, ${record.state}` : ''} · created {day(record.createdAt)}
@@ -401,6 +405,35 @@ function ProfileTab({ id, record, editable }: { id: string; record: SocietyDetai
   const set = (key: ProfileKey, value: string) => setForm((prev) => ({ ...(prev ?? baseline), [key]: value }));
   const setExtraField = (key: 'layout' | 'type', value: string) => setExtra((prev) => ({ ...(prev ?? extraBase), [key]: value }));
   const slugValid = /^[a-z0-9-]{3,48}$/.test(values.slug);
+  const [logoUploading, setLogoUploading] = useState(false);
+
+  /**
+   * Upload immediately (independent of Save): the server crops the image to a 512×512 square
+   * and returns its public URL, which we drop into the form's `logoUrl` — the operator then
+   * presses Save to apply it to the society record.
+   */
+  async function onLogoFile(file: File) {
+    if (!file.type.startsWith('image/')) {
+      toast.error('Choose an image file — PNG, JPEG or WebP.');
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error('The logo must be 5 MB or smaller.');
+      return;
+    }
+    setLogoUploading(true);
+    try {
+      const form = new FormData();
+      form.append('logo', file);
+      const uploaded = await api.upload<{ url: string }>('/platform/uploads/logo', form);
+      set('logoUrl', uploaded.url);
+      toast.success('Logo saved as a 512×512 square — press Save to apply it to the society');
+    } catch (err) {
+      toast.error(err);
+    } finally {
+      setLogoUploading(false);
+    }
+  }
 
   return (
     <form onSubmit={submit} className="stack">
@@ -505,8 +538,34 @@ function ProfileTab({ id, record, editable }: { id: string; record: SocietyDetai
           <Field label="Website">
             <Input value={values.websiteUrl} onChange={(e) => set('websiteUrl', e.target.value)} placeholder="https://" />
           </Field>
-          <Field label="Logo URL">
-            <Input value={values.logoUrl} onChange={(e) => set('logoUrl', e.target.value)} />
+          <Field
+            label="Logo"
+            hint="Upload any shape — PNG, JPEG or WebP up to 5 MB. It is cropped to a 512×512 square. A URL pasted below works too."
+          >
+            <div className="row" style={{ gap: 10, alignItems: 'center', marginBottom: 8 }}>
+              <SocietyLogo logoUrl={values.logoUrl || undefined} name={values.name} size={48} />
+              <label
+                style={{
+                  fontSize: 13,
+                  color: 'var(--brand-dark)',
+                  cursor: editable && form ? 'pointer' : 'default',
+                }}
+              >
+                {logoUploading ? 'Uploading…' : 'Upload logo'}
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  disabled={!editable || !form || logoUploading}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) void onLogoFile(file);
+                    e.target.value = '';
+                  }}
+                  style={{ display: 'none' }}
+                />
+              </label>
+            </div>
+            <Input value={values.logoUrl} onChange={(e) => set('logoUrl', e.target.value)} placeholder="https://…/logo.jpg" />
           </Field>
           <Field label="Cover image URL">
             <Input value={values.coverImageUrl} onChange={(e) => set('coverImageUrl', e.target.value)} />
@@ -565,7 +624,9 @@ function OnboardingTab({ id, record, editable }: { id: string; record: SocietyDe
   const blockers = checklist.filter((c) => !c.done && c.required);
   const [plotCount, setPlotCount] = useState('');
   // A plot/row-house society has no towers — its structure is "N plots", which the operator
-  // types as a single number instead of a building declaration.
+  // types as a single number instead of a building declaration. Each plot unit gets a structure
+  // type (house, villa, bungalow, …); per-plot differences are made by editing individual units.
+  const [plotType, setPlotType] = useState('HOUSE');
   const isPlotLayout = record.layout === 'PLOT' || record.layout === 'MIXED';
 
   async function advance(event: FormEvent) {
@@ -574,7 +635,7 @@ function OnboardingTab({ id, record, editable }: { id: string; record: SocietyDe
     try {
       const payload: Record<string, unknown> =
         step === 'STRUCTURE' && Number(plotCount) > 0
-          ? { buildings: [{ name: 'Plots', code: 'PLOTS', totalFloors: 1, unitsPerFloor: Number(plotCount), unitPrefix: 'PH' }] }
+          ? { buildings: [{ name: 'Plots', code: 'PLOTS', totalFloors: 1, unitsPerFloor: Number(plotCount), unitPrefix: 'PH', unitType: plotType }] }
           : {};
       const result = await api.post<Record<string, unknown>>(`/platform/societies/${id}/onboarding`, {
         step,
@@ -664,16 +725,27 @@ function OnboardingTab({ id, record, editable }: { id: string; record: SocietyDe
                   </Select>
                 </Field>
                 {step === 'STRUCTURE' && isPlotLayout ? (
-                  <Field
-                    label="Plots"
-                    hint={
-                      record.layout === 'PLOT'
-                        ? 'Creates a single "Plots" building: one unit per plot, numbered PH1, PH2, …'
-                        : 'Creates a "Plots" building alongside any towers (units PH1, PH2, …)'
-                    }
-                  >
-                    <Input type="number" min={1} max={10000} value={plotCount} onChange={(e) => setPlotCount(e.target.value)} placeholder="e.g. 42" style={{ width: 120 }} />
-                  </Field>
+                  <>
+                    <Field
+                      label="Plots"
+                      hint={
+                        record.layout === 'PLOT'
+                          ? 'Creates a single "Plots" building: one unit per plot, numbered PH1, PH2, …'
+                          : 'Creates a "Plots" building alongside any towers (units PH1, PH2, …)'
+                      }
+                    >
+                      <Input type="number" min={1} max={10000} value={plotCount} onChange={(e) => setPlotCount(e.target.value)} placeholder="e.g. 42" style={{ width: 120 }} />
+                    </Field>
+                    <Field label="Each plot is a" hint="Applied to every plot unit; edit individual units to vary them">
+                      <Select value={plotType} onChange={(e) => setPlotType(e.target.value)} style={{ width: 170 }}>
+                        {(['HOUSE', 'VILLA', 'BUNGALOW', 'BUILDING', 'TOWER'] as const).map((t) => (
+                          <option key={t} value={t}>
+                            {label(t)}
+                          </option>
+                        ))}
+                      </Select>
+                    </Field>
+                  </>
                 ) : null}
                 <label className="row" style={{ gap: 6, paddingBottom: 8 }}>
                   <input type="checkbox" checked={dryRun} onChange={(e) => setDryRun(e.target.checked)} />

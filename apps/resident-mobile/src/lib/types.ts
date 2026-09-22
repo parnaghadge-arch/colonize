@@ -22,6 +22,7 @@ export interface WhoAmISociety {
   slug: string;
   timezone: string;
   currency: string;
+  logoUrl?: string | null;
 }
 
 export interface WhoAmIMembership {

@@ -611,8 +611,51 @@ export function buildOpenApiDocument(): Record<string, unknown> {
   };
 
   // ── Platform (super admin) ─────────────────────────────────────────────
+  paths['/api/files/{key}'] = {
+    get: op({ tag: 'Files', summary: 'Serve a stored object', operationId: 'getFile',
+      description: 'Streams an object written by the storage service. Objects under the public `logos/` key prefix (society logos) are served **unauthenticated** — the resident and guard apps render the society logo on the login screen, before any token exists — and carry `Cache-Control: public, max-age=31536000, immutable`. Every other key requires either a signed URL (`?expires=…&sig=…`, HMAC over the key) or a platform principal. `Cache-Control: private, no-store` applies to non-public keys.',
+      security: [],
+      params: [
+        { name: 'key', in: 'path', required: true, schema: { type: 'string' }, description: 'Storage key, e.g. `logos/log_9f3a….png`' },
+        { name: 'expires', in: 'query', schema: { type: 'string' }, description: 'Signed-URL expiry (unix seconds), non-public keys only' },
+        { name: 'sig', in: 'query', schema: { type: 'string' }, description: 'HMAC signature for the key, non-public keys only' },
+      ],
+      responses: {
+        200: { description: 'The object', content: { 'application/octet-stream': { schema: { type: 'string', format: 'binary' } } } },
+        ...errResponses([403, 'Not a public key and no valid signature or platform token']),
+        ...STANDARD_ERRORS,
+      } }),
+  };
+
   const P = '/api/platform/societies';
   const platformOnly = [{ platformAuth: [] }];
+  paths['/api/platform/uploads/logo'] = {
+    post: op({ tag: 'Platform', summary: 'Upload a society logo (any shape → square)', operationId: 'uploadSocietyLogo', security: platformOnly,
+      description: 'Accepts any aspect-ratio JPEG, PNG or WebP up to 5 MB. The server honours EXIF orientation and centre-crops to a **512×512 square** (PNG/WebP stay lossless, JPEG is re-encoded at quality 88) and stores it under the public `logos/` key prefix, so every client — including the unauthenticated login screens — displays the same 1:1 image. The response URL is what gets written to `society.logoUrl` (create form or Profile tab).',
+      contentType: 'multipart/form-data',
+      body: {
+        type: 'object',
+        required: ['logo'],
+        properties: {
+          logo: { type: 'string', format: 'binary', description: 'JPG, PNG or WebP image, ≤ 5 MB' },
+          filename: { type: 'string', description: 'Recorded in the storage metadata (optional)' },
+        },
+      },
+      responses: {
+        201: okJson(envelope({
+          type: 'object',
+          properties: {
+            url: { type: 'string', example: '/api/files/logos/log_9f3a….png' },
+            key: { type: 'string' },
+            width: { type: 'integer', example: 512 },
+            height: { type: 'integer', example: 512 },
+            sizeBytes: { type: 'integer' },
+          },
+        }), 'Logo stored as a square'),
+        ...errResponses([413, 'File exceeds the 5 MB logo limit'], [415, 'Not a JPG, PNG or WebP image']),
+        ...STANDARD_ERRORS,
+      } }),
+  };
   paths[P] = {
     get: op({ tag: 'Platform', summary: 'List societies', operationId: 'listSocieties', security: platformOnly, params: LIST_PARAMS,
       responses: { 200: okJson(paginated(ref('Society')), 'Society list'), ...STANDARD_ERRORS } }),
@@ -1482,6 +1525,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
     tags: [
       { name: 'Meta', description: 'Health, readiness, feature detection and identity' },
       { name: 'Auth', description: 'OTP and password login, token rotation, sessions, app lock' },
+      { name: 'Files', description: 'Stored objects: public logo delivery (unauthenticated) and signed-URL access' },
       { name: 'Platform', description: 'Super-admin: society onboarding, provisioning, subscriptions' },
       { name: 'Structure', description: 'Buildings → wings → floors → units, bulk generation and import' },
       { name: 'Residents', description: 'Residents, family members, vehicles, parking' },

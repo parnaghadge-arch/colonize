@@ -72,7 +72,9 @@ const unitSchema = z.object({
   floorId: z.string().min(3).max(40).nullable().optional(),
   floorNumber: z.coerce.number().int().min(-10).max(300).optional(),
   unitNumber: z.string().trim().min(1).max(20).transform((v) => v.toUpperCase()),
-  type: z.enum(['FLAT', 'VILLA', 'PENTHOUSE', 'SHOP', 'OFFICE', 'GARAGE', 'STUDIO']).default('FLAT'),
+  // Plot/row-house societies create units that are whole structures (house, bungalow, tower…),
+  // so the list carries both flat-style and building-style types.
+  type: z.enum(['FLAT', 'VILLA', 'PENTHOUSE', 'SHOP', 'OFFICE', 'GARAGE', 'STUDIO', 'HOUSE', 'BUNGALOW', 'BUILDING', 'TOWER']).default('FLAT'),
   carpetAreaSqft: z.coerce.number().positive().max(200000).optional().nullable(),
   builtUpAreaSqft: z.coerce.number().positive().max(200000).optional().nullable(),
   bedrooms: z.coerce.number().int().min(0).max(30).optional().nullable(),

@@ -228,7 +228,7 @@ doing?" — it reads from the platform database only.
 | Tab | What it is |
 |---|---|
 | **Overview** | Live counters (units/residents/staff, occupancy, collected vs billed, open complaints, active bookings) + structure summary including **layout** |
-| **Profile** | The society record — editable (§5.5), including **society layout** and **organizational type** |
+| **Profile** | The society record — editable (§5.5), including **society layout**, **organizational type** and the **society logo** (upload any shape; the server stores a 512×512 square) |
 | **Onboarding** | Current step, activation checklist, and a step recorder with **dry-run** preview (§5.3–5.4) |
 | **Plan & limits** | Change tier/plan, pin a custom module set, change limits; re-syncs the tenant mirror |
 | **Administrators** | Who can sign in to this society's console — invite, **edit**, **remove** (§5.6) |
@@ -241,7 +241,8 @@ login directory.
 ### 3.4 What you can (and can't) change
 
 - **Editable in Profile:** name, slug, legal name, registration, address,
-  contact details, timezone, currency, GSTIN, notes, **layout**, **type**.
+  contact details, timezone, currency, GSTIN, notes, **layout**, **type**,
+  **logo** (file upload or a pasted URL).
 - **Not editable in Profile:** plan, limits, modules — deliberately. They live
   on the **subscription**, because that is the only place that resolves the
   plan id and re-syncs the tenant mirror. The edit form says so.
@@ -290,8 +291,10 @@ unit**.
   columns for building, wing, floor, type, status, occupancy, people
   (owners/tenants/family), outstanding amount. Per unit: **Edit** (unit
   number, floor, type — FLAT / VILLA / PENTHOUSE / SHOP / OFFICE / GARAGE /
-  STUDIO — status — VACANT / OCCUPIED / LOCKED / UNDER_MAINTENANCE — carpet
-  area, bedrooms) and **Delete**.
+  STUDIO / **HOUSE / BUNGALOW / BUILDING / TOWER** — status —
+  VACANT / OCCUPIED / LOCKED / UNDER_MAINTENANCE — carpet area, bedrooms)
+  and **Delete**. The four building-style types are for plot/row-house
+  societies, where one *unit* is a whole structure standing on a plot.
 - **Bulk generate**: pick building (and wing), floors × units-per-floor,
   numbering pattern and prefix — creates missing floors and numbered units in
   one call. This is how a plot society is normally formed (one "Plots"
@@ -302,10 +305,12 @@ unit**.
   and audited; the unit counters on the society record are refreshed after
   every structural change.
 
-> **Note on "plots".** A plot is simply a unit of type PLOT (or a unit in a
-> single-floor building named *Plots*). Nothing about billing, residents or
-> passes treats it differently from a flat — only the `multiGate` module is
-> omitted for plot societies.
+> **Note on "plots".** A plot is a unit in a single-floor building named
+> *Plots*; its **type** records what stands on the plot (HOUSE, VILLA,
+> BUNGALOW, BUILDING, TOWER, …). Nothing about billing, residents or passes
+> treats it differently from a flat — only the `multiGate` module is omitted
+> for plot societies. To vary a plot from its neighbours, edit that unit's
+> type.
 
 ### 4.3 Residents — add, edit, delete
 
@@ -395,6 +400,12 @@ The form collects:
 
 - **Name** (auto-derives the slug), legal name, registration, city/state/
   pincode/address, timezone, currency, contact email/phone, website.
+- **Logo** (optional): pick any PNG/JPEG/WebP up to 5 MB — a banner, a
+  square, a circle, it doesn't matter. The server centre-crops it to a
+  **512×512 square** and returns the public URL, which is written to the
+  society's `logoUrl` as part of creation. The square is what every client
+  later shows (super-admin list & detail, the society console sidebar, the
+  mobile apps), so an off-shape upload can never distort anything.
 - **Opening plan** (FREE/BASIC/STANDARD/PREMIUM/ENTERPRISE).
 - **Society layout** — the new "society type" question:
   - **Building (towers / apartments)** — the full module set for the plan.
@@ -425,8 +436,11 @@ retry after a failure.
 
 1. **Database provisioned**
 2. **Structure declared** — at least **one unit** exists (the onboarding tab
-   offers the **quick plot setup** for plot societies: enter N plots and the
-   platform declares a single *Plots* building with units PH1…PHN)
+   offers the **quick plot setup** for plot societies: enter N plots, pick
+   what stands on each plot — **house / villa / bungalow / building /
+   tower** — and the platform declares a single *Plots* building with units
+   PH1…PHN, each unit carrying that structure type; vary a plot afterwards
+   by editing the unit)
 3. **Administrator exists** — at least one user with an admin role
 4. **Activation** — flips the society to ACTIVE, flips its PENDING
    administrators to ACTIVE, re-syncs the login directory, and completes
@@ -460,6 +474,12 @@ The **Profile** tab is now a full editor:
   limits** tab.
 - **Organizational type** — RESIDENTIAL_SOCIETY / APARTMENT_COMPLEX /
   GATED_COMMUNITY / HOUSING_SOCIETY / COMMERCIAL_COMMUNITY / MIXED_USE.
+- **Logo** — upload a new image (cropped to a square by the server) or paste
+  a URL; the current logo is previewed next to the picker.
+
+> A logo change is visible on the **next request** — the platform drops the
+> cached society record when the Profile is saved, so the console and mobile
+> apps pick the new square up immediately after sign-in/refresh.
 
 Every profile edit is written with an audit entry (old value → new value), and
 unknown fields are rejected rather than silently dropped, so a misspelled key
@@ -494,9 +514,10 @@ Visitors · Profile**.
 
 ### 6.1 Home
 
-Greeting + society name, then: **outstanding amount**, **open complaints**,
-and quick actions — **Raise a complaint · Pay a bill · Book an amenity ·
-Invite a visitor** — plus the resident's recent complaints.
+The society's **logo** (its 512×512 square, or its first letter if it has
+none) with the society name, then the greeting, **outstanding amount**,
+**open complaints** and quick actions — **Raise a complaint · Pay a bill ·
+Book an amenity · Invite a visitor** — plus the resident's recent complaints.
 
 ### 6.2 Bills
 
@@ -526,9 +547,10 @@ checked out / expired / revoked).
 
 ### 6.6 Profile
 
-Account details, unit(s) and family members, **sessions** (active devices,
-revoke), **app PIN** (enroll/change/remove), password management (set/change),
-push token management, and **sign out**.
+Account details, the **society card** (logo, name, timezone, currency),
+unit(s) and family members, **sessions** (active devices, revoke), **app PIN**
+(enroll/change/remove), password management (set/change), push token
+management, and **sign out**.
 
 ### 6.7 Family members
 
@@ -544,7 +566,9 @@ sign-in permission can log in with their own phone.
 **Sign-in:** the guard's phone + OTP/password. Signing in opens **Shift**:
 start a shift at an assigned gate. While on shift the app is the gate
 console — four bottom tabs: **Queue · Scan · Log · Board** — plus the
-**Walk-in** flow.
+**Walk-in** flow. The **Board** shows the society's logo and name above the
+shift dashboard, so a guard on a shared gate device always knows which
+society they are working for.
 
 ### 7.1 Shift
 
@@ -719,6 +743,7 @@ has; the rest is unchanged. Every change is per-society and auditable.
 | Changed a plan | Plan & limits tab, console plan badge, module nav appearing/disappearing |
 | Changed layout/type | Profile tab, header layout chip, Overview structure panel |
 | Invited/edited/removed an admin | Administrators tab, platform audit trail |
+| Uploaded a society logo | Super-admin list + detail thumbnails, society console sidebar, resident app (Home + Profile), security app Board — the stored file is always the 512×512 square |
 | Created/edited/deleted structure | Structure page tiles + unit list, society counters |
 | Added/edited/removed a resident | Residents list + detail card, resident app (for the person) |
 | Approved a visitor | Entry log, visitor's app, gate queue |
@@ -749,7 +774,7 @@ has; the rest is unchanged. Every change is per-society and auditable.
 
 ## Appendix A — API surface (for integrators)
 
-The full contract is served by the API itself at **`/docs`** (OpenAPI, ~188
+The full contract is served by the API itself at **`/docs`** (OpenAPI, 190
 paths), derived from the exact validators the server enforces:
 
 - `/auth` — OTP, password login, society selection, refresh, logout, profile,
@@ -767,6 +792,10 @@ paths), derived from the exact validators the server enforces:
 - `/complaints`, `/work-orders`, `/service-requests`, `/vendors`, `/staff`
 - `/amenities`, `/amenity-bookings`
 - `/bills`, `/payments`, `/accounting`, `/expenses`, `/incomes`
+- `/platform/uploads/logo` — society logo upload (any aspect ratio →
+  512×512 square, public `logos/` key, returns the URL to store in `logoUrl`)
+- `/files/*` — serves stored objects; `logos/*` keys are **unauthenticated**
+  (mobile login screens), everything else needs a signed URL or platform token
 - `/meta` (feature detection), `/whoami`, `/health`, `/health/ready`
 
 All responses use the envelope `{ success, message, data, meta: { requestId } }`;
@@ -780,6 +809,8 @@ errors use `{ success: false, message, code }` with a stable error code
 |---|---|
 | **Society** | A housing society / complex / gated community / plot development — one tenant, one database |
 | **Layout** | How the society is physically formed: Building / Plot-row house / Both |
+| **Plot** | One unit in a single-floor "Plots" building; its unit type records what stands on it (House / Villa / Bungalow / Building / Tower) |
+| **Logo** | The society's image, stored as a 512×512 square under a public key; shown in the super-admin panel, the society console and both mobile apps |
 | **Provisioning** | Creating and seeding the society's dedicated database |
 | **Identity directory** | The platform-wide index of "who is in which society" used by login |
 | **Subscription mirror** | The plan record inside the society's own database that authorization reads |

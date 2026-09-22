@@ -115,8 +115,13 @@ export function AppShell() {
         </div>
 
         <div className="sidebar__society">
-          <b>{who?.society?.name ?? '—'}</b>
-          <span>{who?.society?.timezone ?? ''}</span>
+          <div className="sidebar__society-text">
+            <b>{who?.society?.name ?? '—'}</b>
+            <span>{who?.society?.timezone ?? ''}</span>
+          </div>
+          {who?.society?.logoUrl ? (
+            <img className="sidebar__logo" src={who.society.logoUrl} alt="" />
+          ) : null}
         </div>
 
         <nav className="sidebar__nav">

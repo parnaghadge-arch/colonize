@@ -100,6 +100,8 @@ export interface RequestOptions {
   anonymous?: boolean;
   /** Expect a binary response (PDF) and return the Blob. */
   raw?: boolean;
+  /** Body is a FormData — sent as multipart/form-data without a JSON content type. */
+  multipart?: boolean;
 }
 
 function buildUrl(path: string, query?: RequestOptions['query']): string {
@@ -122,10 +124,11 @@ export function onUnauthorized(fn: () => void): () => void {
 }
 
 export async function requestEnvelope<T>(path: string, options: RequestOptions = {}): Promise<Envelope<T>> {
-  const { method = 'GET', query, body, signal, anonymous = false, raw = false } = options;
+  const { method = 'GET', query, body, signal, anonymous = false, raw = false, multipart = false } = options;
 
   const headers: Record<string, string> = { Accept: raw ? 'application/pdf' : 'application/json' };
-  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  // Multipart: the browser sets the content type with its boundary; never set it by hand.
+  if (body !== undefined && !multipart) headers['Content-Type'] = 'application/json';
   if (!anonymous) {
     const token = tokenStore.token;
     if (token) headers.Authorization = `Bearer ${token}`;
@@ -136,7 +139,7 @@ export async function requestEnvelope<T>(path: string, options: RequestOptions =
     response = await fetch(buildUrl(path, query), {
       method,
       headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: multipart ? (body as FormData) : body === undefined ? undefined : JSON.stringify(body),
       signal,
     });
   } catch (err) {
@@ -198,6 +201,8 @@ export const api = {
   patch: <T>(path: string, body?: unknown) => request<T>(path, { method: 'PATCH', body }),
   del: <T>(path: string, body?: unknown) => request<T>(path, { method: 'DELETE', body }),
   blob: (path: string) => request<Blob>(path, { raw: true }),
+  /** Multipart upload (e.g. a society logo → POST /platform/uploads/logo). */
+  upload: <T>(path: string, form: FormData) => request<T>(path, { method: 'POST', body: form, multipart: true }),
   /** Full envelope, for endpoints that return something in `meta` (the dev OTP, request id). */
   envelope: {
     post: <T>(path: string, body?: unknown) => requestEnvelope<T>(path, { method: 'POST', body, anonymous: true }),

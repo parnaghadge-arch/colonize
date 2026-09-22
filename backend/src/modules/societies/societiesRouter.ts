@@ -346,8 +346,11 @@ router.patch(
         tier: String(after!.tier),
         modules: (after!.modules as string[]) ?? [],
       });
-      invalidateSociety(id);
     }
+
+    // `authenticate` serves the society record from a 60s cache — a plain logo/name change must
+    // be visible on the very next request, not after the TTL expires.
+    invalidateSociety(id);
 
     await logSystemAudit(ctx.platformDatabase, {
       collection: 'platform_audit_logs',

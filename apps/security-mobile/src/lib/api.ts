@@ -36,6 +36,17 @@ export function resolveBaseUrl(): string {
   return platformDefaultUrl();
 }
 
+/**
+ * Turn a server-absolute path (e.g. `/api/files/logos/abc.jpg`) into an absolute URL that
+ * React Native's `Image` can load. The API base already ends in `/api`, so the path's own
+ * `/api` prefix must not be doubled.
+ */
+export function resolveAssetUrl(path: string): string {
+  if (/^https?:\/\//i.test(path)) return path;
+  const root = resolveBaseUrl().replace(/\/api\/?$/, '');
+  return `${root}${path.startsWith('/') ? path : `/${path}`}`;
+}
+
 /* --------------------------------- errors ---------------------------------- */
 
 export interface FieldError {

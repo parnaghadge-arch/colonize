@@ -184,7 +184,7 @@ export const TENANT_COLLECTIONS: Registry = {
     unitNumber: S({ required: true, trim: true }),
     /** Human readable label: "A-101, Tower A". */
     label: S({ index: true }),
-    type: S({ enum: ['FLAT', 'APARTMENT', 'VILLA', 'BUNGALOW', 'PENTHOUSE', 'STUDIO', 'SHOP', 'OFFICE', 'WAREHOUSE', 'PARKING_UNIT'], default: 'FLAT' }),
+    type: S({ enum: ['FLAT', 'APARTMENT', 'VILLA', 'BUNGALOW', 'PENTHOUSE', 'STUDIO', 'SHOP', 'OFFICE', 'WAREHOUSE', 'PARKING_UNIT', 'HOUSE', 'BUILDING', 'TOWER'], default: 'FLAT' }),
     carpetAreaSqft: N(),
     builtUpAreaSqft: N(),
     bedrooms: N(),

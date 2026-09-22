@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { Alert, Button, Card, KV, Screen, ScreenTitle, colors } from '../components/ui.tsx';
+import { Alert, Button, Card, KV, Screen, ScreenTitle, SocietyBadge, colors } from '../components/ui.tsx';
 import { useSession } from '../lib/session.tsx';
 
 export function ProfileScreen() {
@@ -42,7 +42,11 @@ export function ProfileScreen() {
       </Card>
 
       <Card>
-        <KV label="Society" value={who?.society?.name ?? '—'} />
+        {who?.society ? (
+          <View style={{ marginBottom: 10 }}>
+            <SocietyBadge name={who.society.name} logoUrl={who.society.logoUrl} size={40} />
+          </View>
+        ) : null}
         <KV label="Timezone" value={who?.society?.timezone ?? '—'} />
         <KV label="Currency" value={who?.society?.currency ?? '—'} />
         <KV label="Primary unit" value={who?.membership?.primaryUnitId ? 'Linked' : 'Not linked'} />

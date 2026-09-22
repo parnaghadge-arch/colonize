@@ -748,7 +748,7 @@ function UnitForm({
           </Field>
           <Field label="Type">
             <Select value={type} onChange={(e) => setType(e.target.value)}>
-              {['FLAT', 'APARTMENT', 'VILLA', 'BUNGALOW', 'PENTHOUSE', 'STUDIO', 'SHOP', 'OFFICE'].map((t) => (
+              {['FLAT', 'VILLA', 'PENTHOUSE', 'SHOP', 'OFFICE', 'GARAGE', 'STUDIO', 'HOUSE', 'BUNGALOW', 'BUILDING', 'TOWER'].map((t) => (
                 <option key={t} value={t}>
                   {t}
                 </option>
@@ -1062,7 +1062,7 @@ function EditUnitForm({ data, onClose, onDone, error, setError }: FormProps & { 
         <div className="form-row">
           <Field label="Type">
             <Select value={type} onChange={(e) => setType(e.target.value)}>
-              {['FLAT', 'VILLA', 'PENTHOUSE', 'SHOP', 'OFFICE', 'GARAGE', 'STUDIO'].map((t) => (
+              {['FLAT', 'VILLA', 'PENTHOUSE', 'SHOP', 'OFFICE', 'GARAGE', 'STUDIO', 'HOUSE', 'BUNGALOW', 'BUILDING', 'TOWER'].map((t) => (
                 <option key={t} value={t}>
                   {t.split('_').join(' ')}
                 </option>

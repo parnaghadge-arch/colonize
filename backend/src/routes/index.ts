@@ -29,6 +29,7 @@ import {
   expensesRouter,
   incomesRouter,
 } from '../modules/finance/financeRouter.js';
+import { filesRouter, platformUploadsRouter } from '../modules/files/filesRouter.js';
 import { authenticate, requireTenantContext } from '../middleware/authenticate.js';
 import { asyncHandler } from '../middleware/errors.js';
 import { validate } from '../middleware/validate.js';
@@ -168,7 +169,7 @@ apiRouter.get(
         scope: c.principal.scope,
       },
       society: c.society
-        ? { id: c.society.id, name: c.society.name, slug: c.society.slug, timezone: c.society.timezone, currency: c.society.currency }
+        ? { id: c.society.id, name: c.society.name, slug: c.society.slug, timezone: c.society.timezone, currency: c.society.currency, logoUrl: c.society.logoUrl ?? null }
         : null,
       membership: {
         unitIds: c.membership.unitIds,
@@ -194,6 +195,13 @@ apiRouter.get(
 /* ----------------------------------- auth ----------------------------------- */
 
 apiRouter.use('/auth', authRouter);
+
+/* ------------------------------ files & uploads ----------------------------- */
+
+// Stored objects (services/storage.ts). Public categories (logos) are unauthenticated;
+// everything else needs a signed URL or a platform principal.
+apiRouter.use('/files', filesRouter);
+apiRouter.use('/platform/uploads', platformUploadsRouter);
 
 /* --------------------------- super-admin (platform) -------------------------- */
 

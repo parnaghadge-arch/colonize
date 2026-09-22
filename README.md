@@ -16,14 +16,14 @@ No Next.js anywhere.
 | Area | State |
 | --- | --- |
 | `packages/shared` | ✅ Complete — shared types, enums, plan tiers, module keys |
-| `backend` | ✅ Complete — 188 OpenAPI paths (100% of implemented routes documented), RBAC, tenant isolation, soft deletes, audit log, transactions |
+| `backend` | ✅ Complete — 190 OpenAPI paths (100% of implemented routes documented), RBAC, tenant isolation, soft deletes, audit log, transactions, square-normalised logo uploads (`sharp`) |
 | Seed data (Green Valley Residency) | ✅ Complete — 5 towers / 20 wings / 800 units / 1500 residents / 50 staff / 10 vendors / 5 gates |
 | §80 acceptance scenario | ✅ Verified end to end — `npm run e2e` → **117/117 checks, 11 scenario groups** |
 | Docker + production env | ✅ Complete — `docker/Dockerfile`, `docker/docker-compose.yml`, `.env.production` |
 | `apps/admin-web`, `apps/super-admin-web` | ✅ Complete — React + Vite consoles (society office / platform) |
 | `apps/resident-mobile`, `apps/security-mobile` | ✅ Complete — Expo (React Native) resident + guard apps |
 | Vitest unit / integration suites | ✅ Complete — 15 files / 376 tests (`npm test -w backend`) |
-| Mobile contract check | ✅ Complete — `npm run contract -w backend` (40 checks) verifies every endpoint the mobile apps call, at any hour of the day |
+| Mobile contract check | ✅ Complete — `npm run contract -w backend` (46 checks) verifies every endpoint the mobile apps call, at any hour of the day (4 fewer when the demo resident's bill was already paid in an earlier run) |
 | CI (GitHub Actions) | ✅ Complete — `.github/workflows/ci.yml`: build → typecheck → unit tests → seed → live e2e → mobile contract on every push/PR |
 
 The backend is a fully working product surface — every endpoint listed in `/docs` is real, not stubbed.
@@ -506,7 +506,7 @@ npm run dev:security            # security app (Expo) — web / Android / iOS
 npm run build                   # shared → backend → web apps
 npm run typecheck               # tsc --noEmit across all workspaces
 npm run test -w backend         # vitest
-npm run contract -w backend     # mobile contract check (36 checks, any hour of day)
+npm run contract -w backend     # mobile contract check (46 checks, any hour of day)
 npm run db:provision -w backend # provision a single society database
 ```
 

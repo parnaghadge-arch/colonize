@@ -6,7 +6,7 @@
 import React, { useCallback, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import { Alert, Card, EmptyState, KV, Loading, Screen, ScreenTitle, Stat, colors } from '../components/ui.tsx';
+import { Alert, Card, EmptyState, KV, Loading, Screen, ScreenTitle, SocietyBadge, Stat, colors } from '../components/ui.tsx';
 import { api } from '../lib/api.ts';
 import { formatTime } from '../lib/format.ts';
 import { useSession } from '../lib/session.tsx';
@@ -53,7 +53,8 @@ export function BoardScreen({ navigation }: Props) {
 
   return (
     <Screen>
-      <ScreenTitle title="Society board" subtitle={`${who?.society?.name} · ${who?.society?.timezone}`} />
+      {who?.society ? <SocietyBadge name={who.society.name} logoUrl={who.society.logoUrl} /> : null}
+      <ScreenTitle title="Society board" subtitle={who?.society?.timezone} />
       {error ? <Alert tone="error">{error}</Alert> : null}
       {!data ? (
         <Loading label="Loading the security dashboard…" />

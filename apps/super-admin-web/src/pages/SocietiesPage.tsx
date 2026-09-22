@@ -20,6 +20,7 @@ import {
   useToast,
 } from '../components/ui.tsx';
 import { day, label, number } from '../lib/format.ts';
+import { SocietyLogo } from '../components/SocietyLogo.tsx';
 import { useSession } from '../lib/session.tsx';
 import { ADMIN_ROLES, PLAN_CODES, SOCIETY_LAYOUTS, SOCIETY_LAYOUT_LABELS, SOCIETY_STATUSES, type Society, type SocietyLayout } from '../lib/types.ts';
 
@@ -171,11 +172,14 @@ export function SocietiesPage() {
                 key: 'name',
                 header: 'Society',
                 render: (s) => (
-                  <div>
-                    <b>{s.name}</b>
-                    <div className="faint small">
-                      {s.slug} · {s.city ?? '—'}
-                      {s.state ? `, ${s.state}` : ''}
+                  <div className="row" style={{ gap: 10, alignItems: 'center' }}>
+                    <SocietyLogo logoUrl={s.logoUrl} name={s.name} size={34} radius={8} />
+                    <div>
+                      <b>{s.name}</b>
+                      <div className="faint small">
+                        {s.slug} · {s.city ?? '—'}
+                        {s.state ? `, ${s.state}` : ''}
+                      </div>
                     </div>
                   </div>
                 ),
@@ -299,8 +303,19 @@ function CreateSocietyForm({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const toast = useToast();
+  const [logoFile, setLogoFile] = useState<File | null>(null);
+  const [logoPreview, setLogoPreview] = useState<string | null>(null);
 
   const set = <K extends keyof CreateForm>(key: K, value: CreateForm[K]) => setForm((prev) => ({ ...prev, [key]: value }));
+
+  /** Any shape in — the server crops it to a 512×512 square. */
+  function onLogoChange(file: File | null) {
+    setLogoFile(file);
+    setLogoPreview((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return file ? URL.createObjectURL(file) : null;
+    });
+  }
 
   /** Slug must be lowercase alphanumerics and dashes; derive it from the name until edited. */
   function onNameChange(value: string) {
@@ -348,6 +363,17 @@ function CreateSocietyForm({
         if (form.adminPhone.trim()) admin.phone = form.adminPhone.trim();
         if (form.adminPassword) admin.password = form.adminPassword;
         body.admin = admin;
+      }
+
+      // A picked logo is uploaded first (any shape → 512×512 square on the server) and its
+      // public URL is what gets written to the society record.
+      if (logoFile) {
+        if (!logoFile.type.startsWith('image/')) throw new Error('Choose an image file — PNG, JPEG or WebP.');
+        if (logoFile.size > 5 * 1024 * 1024) throw new Error('The logo must be 5 MB or smaller.');
+        const fd = new FormData();
+        fd.append('logo', logoFile);
+        const uploaded = await api.upload<{ url: string }>('/platform/uploads/logo', fd);
+        body.logoUrl = uploaded.url;
       }
 
       // The response carries the society *and* the administrator it created, so the operator can be
@@ -426,6 +452,49 @@ function CreateSocietyForm({
             <Input value={form.country} onChange={(e) => set('country', e.target.value.toUpperCase())} maxLength={2} />
           </Field>
         </div>
+
+        <Field label="Logo" hint="Optional — any shape (PNG, JPEG or WebP, up to 5 MB); it is saved as a 512×512 square">
+          <div className="row" style={{ gap: 10, alignItems: 'center' }}>
+            {logoPreview ? (
+              <img
+                src={logoPreview}
+                alt="Logo preview"
+                style={{ width: 52, height: 52, borderRadius: 10, objectFit: 'cover', border: '1px solid var(--border)' }}
+              />
+            ) : (
+              <span
+                aria-hidden
+                style={{
+                  width: 52,
+                  height: 52,
+                  borderRadius: 10,
+                  border: '1px dashed var(--border-strong)',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: 'var(--text-faint)',
+                  fontSize: 12,
+                }}
+              >
+                512×512
+              </span>
+            )}
+            <label style={{ fontSize: 13, color: 'var(--brand-dark)', cursor: 'pointer' }}>
+              {logoFile ? 'Change logo' : 'Choose an image'}
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                onChange={(e) => onLogoChange(e.target.files?.[0] ?? null)}
+                style={{ display: 'none' }}
+              />
+            </label>
+            {logoFile ? (
+              <Button size="sm" variant="ghost" onClick={() => onLogoChange(null)}>
+                Remove
+              </Button>
+            ) : null}
+          </div>
+        </Field>
 
         <Field label="Address">
           <Textarea rows={2} value={form.address} onChange={(e) => set('address', e.target.value)} />

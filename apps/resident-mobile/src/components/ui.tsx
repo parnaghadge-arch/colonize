@@ -6,6 +6,7 @@
 import React, { type ReactNode } from 'react';
 import {
   ActivityIndicator,
+  Image,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -13,6 +14,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { resolveAssetUrl } from '../lib/api.ts';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 export const colors = {
@@ -50,6 +52,56 @@ export function ScreenTitle({ title, subtitle }: { title: string; subtitle?: str
     <View style={{ marginBottom: 16 }}>
       <Text style={styles.title}>{title}</Text>
       {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
+    </View>
+  );
+}
+
+/**
+ * The signed-in society as a badge: its logo (the server always stores a square, so `cover`
+ * never distorts it) with the first letter as fallback, plus the name.
+ */
+export function SocietyBadge({
+  name,
+  logoUrl,
+  size = 34,
+  showName = true,
+}: {
+  name?: string | null;
+  logoUrl?: string | null;
+  size?: number;
+  showName?: boolean;
+}) {
+  const uri = logoUrl ? resolveAssetUrl(logoUrl) : null;
+  const initial = (name ?? 'S').trim().charAt(0).toUpperCase() || 'S';
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+      {uri ? (
+        <Image
+          source={{ uri }}
+          style={{
+            width: size,
+            height: size,
+            borderRadius: Math.round(size * 0.28),
+            backgroundColor: colors.surface,
+            borderWidth: 1,
+            borderColor: colors.border,
+          }}
+        />
+      ) : (
+        <View
+          style={{
+            width: size,
+            height: size,
+            borderRadius: Math.round(size * 0.28),
+            backgroundColor: colors.brandSoft,
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <Text style={{ color: colors.brandDark, fontWeight: '800', fontSize: Math.round(size * 0.42) }}>{initial}</Text>
+        </View>
+      )}
+      {showName ? <Text style={{ fontSize: 15, fontWeight: '700', color: colors.text }}>{name ?? '—'}</Text> : null}
     </View>
   );
 }
