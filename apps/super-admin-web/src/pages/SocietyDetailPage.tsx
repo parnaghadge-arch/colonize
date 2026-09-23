@@ -1,6 +1,6 @@
 import { useMemo, useState, type FormEvent } from 'react';
 import type { StructureSetupPayload } from '@colonize/shared';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../lib/api.ts';
 import { useList, useResource } from '../lib/useResource.ts';
 import {
@@ -55,7 +55,7 @@ import {
  */
 export function SocietyDetailPage() {
   const { id = '' } = useParams();
-  const { can, canAny } = useSession();
+  const { can, canAny, isSuperAdmin } = useSession();
   const toast = useToast();
 
   const society = useResource<SocietyDetail>(`/platform/societies/${id}`);
@@ -219,6 +219,8 @@ export function SocietyDetailPage() {
       {tab === 'plan' ? <PlanTab id={id} record={record} editable={canSubscription} /> : null}
       {tab === 'admins' ? <AdminsTab id={id} canInvite={canManage || can('user:create')} canManage={canManage} /> : null}
       {tab === 'audit' ? <AuditTab id={id} /> : null}
+
+      {isSuperAdmin ? <DangerZone id={id} name={record.name} onCleared={() => { society.reload(); onboarding.reload(); }} /> : null}
 
       {statusTarget ? (
         <StatusForm
@@ -1500,5 +1502,103 @@ function StatusForm({ id, current, onClose, onDone }: { id: string; current: str
         </Field>
       </form>
     </Modal>
+  );
+}
+
+/* ------------------------------- danger zone ------------------------------- */
+
+function DangerZone({ id, name, onCleared }: { id: string; name: string; onCleared: () => void }) {
+  const toast = useToast();
+  const navigate = useNavigate();
+  const [mode, setMode] = useState<null | 'clear' | 'delete'>(null);
+  const [confirmName, setConfirmName] = useState('');
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+
+  const nameMatches = confirmName.trim().toLowerCase() === name.trim().toLowerCase();
+  const ready = nameMatches && reason.trim().length >= 3;
+
+  function open(next: 'clear' | 'delete') {
+    setMode(next);
+    setConfirmName('');
+    setReason('');
+    setError(null);
+  }
+
+  async function submit() {
+    if (!mode || !ready || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await api.post<{ summary?: string }>(`/platform/societies/${id}/${mode === 'clear' ? 'clear-data' : 'delete'}`, {
+        confirmName: confirmName.trim(),
+        reason: reason.trim(),
+      });
+      toast.success(result.summary ?? (mode === 'clear' ? 'Society data cleared' : 'Society deleted'));
+      setMode(null);
+      if (mode === 'delete') navigate('/societies');
+      else onCleared();
+    } catch (err) {
+      setError(err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card
+      title="Danger zone"
+      subtitle="Super admin only. These cannot be undone."
+    >
+      <div className="stack" style={{ gap: 10 }}>
+        <p className="small muted" style={{ margin: 0 }}>
+          <b>Clear all data</b> removes units, residents, bills, visitors, guards and every other record.
+          The society and its administrator logins stay — Society Admin, Chairman, Secretary, Treasurer
+          and Committee sign in again with the same password. Everyone else cannot.
+        </p>
+        <p className="small muted" style={{ margin: 0 }}>
+          <b>Delete society</b> removes the society itself, its database and those logins.
+        </p>
+        <div className="row row--wrap" style={{ gap: 8 }}>
+          <Button type="button" variant="danger" onClick={() => open('clear')}>
+            Clear all data
+          </Button>
+          <Button type="button" variant="danger" onClick={() => open('delete')}>
+            Delete society
+          </Button>
+        </div>
+      </div>
+
+      {mode ? (
+        <Modal
+          title={mode === 'clear' ? `Clear all data — ${name}` : `Delete ${name}`}
+          onClose={() => (busy ? undefined : setMode(null))}
+        >
+          <div className="stack">
+            {error ? <ErrorAlert error={error} /> : null}
+            <Alert tone="danger">
+              {mode === 'clear'
+                ? 'Units, residents, bills, visitors and every other record will be removed. Administrator passwords are kept. This cannot be undone.'
+                : 'The society, its database and every login that belongs to it will be removed. This cannot be undone.'}
+            </Alert>
+            <Field label={`Type ${name} to confirm`} required>
+              <Input value={confirmName} onChange={(e) => setConfirmName(e.target.value)} autoComplete="off" placeholder={name} />
+            </Field>
+            <Field label="Reason" required hint="Written to the platform audit trail">
+              <Textarea value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Wrong society created during a demo" />
+            </Field>
+            <div className="row" style={{ gap: 8, justifyContent: 'flex-end' }}>
+              <Button type="button" onClick={() => setMode(null)} disabled={busy}>
+                Cancel
+              </Button>
+              <Button type="button" variant="danger" busy={busy} disabled={!ready} onClick={() => void submit()}>
+                {mode === 'clear' ? 'Clear all data' : 'Delete society'}
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      ) : null}
+    </Card>
   );
 }

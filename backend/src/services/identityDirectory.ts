@@ -205,6 +205,26 @@ export async function rebuildForSociety(
   return { users: count };
 }
 
+/** Remove every login-directory membership for a society. Used when the society is deleted. */
+export async function detachSociety(societyId: string): Promise<{ entries: number }> {
+  const platform = await databases.platform();
+  const directory = platform.collection<DirectoryEntry>('identity_directory');
+  const entries = await directory.find({ societyIds: societyId }, { limit: 100_000, includeDeleted: true });
+  let touched = 0;
+  for (const entry of entries) {
+    const memberships = ((entry.memberships ?? []) as DirectoryMembership[]).filter((m) => m.societyId !== societyId);
+    if (memberships.length === 0) {
+      await directory.deleteOne({ _id: entry._id }, { includeDeleted: true });
+    } else {
+      const societyIds = (entry.societyIds ?? []).filter((s) => s !== societyId);
+      await directory.updateOne({ _id: entry._id }, { $set: { memberships, societyIds } });
+    }
+    touched += 1;
+  }
+  societyCache.clear();
+  return { entries: touched };
+}
+
 function normalise(phone: string): string {
   const digits = phone.replace(/[^\d+]/g, '');
   if (digits.startsWith('+')) return digits;

@@ -238,6 +238,19 @@ Header actions: status changes (suspend/inactive/archive/restore),
 re-provision the database (idempotent — safe after a failed seed), rebuild the
 login directory.
 
+**Danger zone** (super admin only, at the bottom of the society page):
+
+- **Clear all data** — removes units, residents, bills, visitors, guards and
+  every other operational record. The society, its plan, its profile and its
+  **administrator logins** stay (Society Admin, Chairman, Secretary, Treasurer,
+  Committee). They sign in again with the same password. Everyone else's
+  sign-in stops working.
+- **Delete society** — removes the society itself, its database and those
+  logins. This cannot be undone.
+
+Both ask the operator to type the society name and a reason. The reason is
+written to the platform audit trail before anything is removed.
+
 ### 3.4 What you can (and can't) change
 
 - **Editable in Profile:** name, slug, legal name, registration, address,

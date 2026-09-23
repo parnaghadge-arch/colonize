@@ -676,6 +676,18 @@ export function buildOpenApiDocument(): Record<string, unknown> {
       description: 'Partial update of the society record. Unknown fields are rejected rather than stripped, so a misspelled key cannot answer 200 having changed nothing. `tier` and `modules` are deliberately absent: entitlements are read from the tenant subscription mirror, so use `PUT /{id}/subscription` — setting them here would change only what this panel displays.',
       responses: { 200: okJson(envelope(ref('Society')), 'Updated'), ...errResponses([422, 'An unknown or plan-owned field was supplied']), ...STANDARD_ERRORS } }),
   };
+  paths[`${P}/{id}/clear-data`] = {
+    post: op({ tag: 'Platform', summary: 'Clear a society’s data, keep administrator logins', operationId: 'clearSocietyData', security: platformOnly,
+      description: 'Super admin only. Deletes units, residents, bills, visitors, guards and every other operational record, then restores the society administrator accounts (Society Admin, Chairman, Secretary, Treasurer, Committee) so they can sign in with the same password. The society, its plan and its profile stay. The caller must type the society name and give a reason, both of which are audited. Sessions are wiped, so everyone signs in again.',
+      body: { type: 'object', required: ['confirmName', 'reason'], properties: { confirmName: { type: 'string' }, reason: { type: 'string', minLength: 3 } } },
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Data cleared'), ...errResponses([422, 'The typed name does not match the society']), ...STANDARD_ERRORS } }),
+  };
+  paths[`${P}/{id}/delete`] = {
+    post: op({ tag: 'Platform', summary: 'Delete a society', operationId: 'deleteSociety', security: platformOnly,
+      description: 'Super admin only. Drops the tenant database, removes every login that belonged to the society, and deletes the society record. This cannot be undone. The caller must type the society name and give a reason. The platform audit entry is written before the record is removed.',
+      body: { type: 'object', required: ['confirmName', 'reason'], properties: { confirmName: { type: 'string' }, reason: { type: 'string', minLength: 3 } } },
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Society deleted'), ...errResponses([422, 'The typed name does not match the society']), ...STANDARD_ERRORS } }),
+  };
   paths[`${P}/{id}/provision`] = {
     post: op({ tag: 'Platform', summary: 'Provision (or repair) the society database', operationId: 'provisionSociety', security: platformOnly,
       description: 'Idempotent: safe to re-run after a partial onboarding.',

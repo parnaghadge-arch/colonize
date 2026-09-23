@@ -377,7 +377,9 @@ All routes are mounted under the `/api` prefix and documented in OpenAPI 3.1.
 - Records are **unit-scoped** where applicable: residents see their own unit's data, not the
   whole society's.
 - All writes go through an **audit log**; financial and visitor flows run inside **transactions**.
-- Deletes are **soft deletes** — no hard removal of society data.
+- Deletes are **soft deletes** — records stay for the audit trail. A super admin
+  can still **delete a society** outright, or **clear its data** while keeping
+  administrator logins.
 
 ---
 

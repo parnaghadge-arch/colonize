@@ -11,6 +11,7 @@ import {
   type SocietyLayout,
 } from '@colonize/shared';
 import { databases } from '../../db/manager.js';
+import { TENANT_COLLECTION_NAMES } from '../../db/registry/index.js';
 import type { Document, TenantDatabase } from '../../db/drivers/types.js';
 import { newId } from '../../db/ids.js';
 import { ApiError } from '../../utils/errors.js';
@@ -19,7 +20,8 @@ import { logger } from '../../config/logger.js';
 import { logSystemAudit } from '../../services/audit.js';
 import { updateSettings } from '../../services/settings.js';
 import { importUnitsFromCsv, createBuilding, createWing, generateUnits, setupStructure, type StructureContext } from '../structure/structureService.js';
-import { upsertMembership, rebuildForSociety } from '../../services/identityDirectory.js';
+import { upsertMembership, rebuildForSociety, detachSociety } from '../../services/identityDirectory.js';
+import { storage } from '../../services/storage.js';
 import { invalidateSociety } from '../../services/cache.js';
 
 /**
@@ -771,6 +773,203 @@ export async function platformStats(platform: TenantDatabase): Promise<Document>
     byCity,
     newThisMonth,
   };
+}
+
+const destructiveLocks = new Set<string>();
+
+function holdDestructiveLock(societyId: string): void {
+  if (destructiveLocks.has(societyId)) {
+    throw ApiError.conflict('A delete or clear is already running for this society. Wait for it to finish.');
+  }
+  destructiveLocks.add(societyId);
+}
+
+function releaseDestructiveLock(societyId: string): void {
+  destructiveLocks.delete(societyId);
+}
+
+function confirmSocietyName(society: Document, typed: string): void {
+  const expected = String(society.name ?? '').trim();
+  if (!expected || expected.toLowerCase() !== typed.trim().toLowerCase()) {
+    throw ApiError.badRequest(`Type the society name to confirm. Expected "${expected}".`);
+  }
+}
+
+function isKeptAdmin(roles: unknown): boolean {
+  if (!Array.isArray(roles)) return false;
+  return roles.some((role) => SOCIETY_ADMIN_ROLES.includes(String(role)));
+}
+
+/** Drop every tenant collection. The connection stays; provisioning fills the baseline back in. */
+async function wipeTenantCollections(db: TenantDatabase): Promise<void> {
+  for (const name of TENANT_COLLECTION_NAMES) {
+    await db.collection(name).deleteMany({}, { includeDeleted: true });
+  }
+}
+
+function adminSnapshot(user: Document): Document {
+  return {
+    ...user,
+    residentId: null,
+    staffId: null,
+    vendorId: null,
+    unitIds: [],
+    primaryUnitId: null,
+    gateIds: [],
+    deletedAt: null,
+  };
+}
+
+/**
+ * Remove every operational record (units, residents, bills, visitors, guards, …) and keep the
+ * society itself plus the administrator accounts that can sign in to its console.
+ *
+ * Sessions are wiped, so everyone signs in again. Passwords on the kept accounts are unchanged.
+ */
+export async function clearSocietyData(
+  ctx: SocietiesContext,
+  societyId: string,
+  input: { confirmName: string; reason: string },
+): Promise<Document> {
+  const platform = ctx.platform;
+  const society = await platform.collection('societies').findOne({ _id: societyId });
+  if (!society) throw ApiError.notFound('Society');
+  confirmSocietyName(society, input.confirmName);
+  if (!society.databaseProvisioned) {
+    throw ApiError.badRequest('This society has no database yet, so there is no data to clear.');
+  }
+  const reason = input.reason.trim();
+  if (reason.length < 3) throw ApiError.badRequest('A reason is required, and it is written to the audit trail.');
+
+  holdDestructiveLock(societyId);
+  try {
+    const db = await databases.tenantDb(societyId);
+    const users = await db.collection('users').find({ societyId }, { limit: 100_000, includeDeleted: true });
+    const kept = users.filter((user) => isKeptAdmin(user.roles) && !user.deletedAt);
+    const snapshots = kept.map(adminSnapshot);
+
+    const [units, residents, buildings] = await Promise.all([
+      db.collection('units').countDocuments({ societyId }),
+      db.collection('residents').countDocuments({ societyId }),
+      db.collection('buildings').countDocuments({ societyId }),
+    ]);
+
+    await wipeTenantCollections(db);
+    await databases.provision({
+      id: societyId,
+      slug: String(society.slug),
+      databaseName: String(society.databaseName),
+      planTier: society.tier ? String(society.tier) : undefined,
+      modules: Array.isArray(society.modules) ? (society.modules as string[]) : undefined,
+    });
+    for (const admin of snapshots) {
+      await db.collection('users').create(admin, { skipUniqueCheck: true });
+    }
+    await rebuildForSociety(db, { id: societyId, name: String(society.name), slug: String(society.slug) });
+    await storage.removeSocietyFiles(societyId);
+
+    await platform.collection('societies').updateOne(
+      { _id: societyId },
+      { $set: { onboardingStep: 'STRUCTURE', onboardingCompletedAt: null, updatedAt: new Date() } },
+    );
+    const counts = await refreshSocietyCounters(societyId);
+    invalidateSociety(societyId);
+
+    const summary =
+      kept.length > 0
+        ? `Cleared society data. ${kept.length} administrator login${kept.length === 1 ? '' : 's'} kept — they sign in with the same password.`
+        : 'Cleared society data. No administrator login was on file, so none was kept.';
+
+    await logSystemAudit(platform, {
+      collection: 'platform_audit_logs',
+      societyId,
+      module: 'society',
+      action: 'society.data_cleared',
+      recordId: societyId,
+      recordType: 'society',
+      oldValue: { units, residents, buildings, users: users.length },
+      newValue: { adminsKept: kept.length, reason, counts },
+      severity: 'WARNING',
+      actor: { id: ctx.actorId, name: ctx.actorName ?? null, type: 'PLATFORM' },
+    });
+
+    return {
+      societyId,
+      adminsKept: kept.length,
+      usersRemoved: users.filter((user) => !user.deletedAt).length - kept.length,
+      unitsRemoved: units,
+      residentsRemoved: residents,
+      summary,
+    };
+  } finally {
+    releaseDestructiveLock(societyId);
+  }
+}
+
+/**
+ * Delete the society, its database, its files and every login that belonged to it.
+ * The platform audit entry is written first, so the action remains after the record is gone.
+ */
+export async function deleteSociety(
+  ctx: SocietiesContext,
+  societyId: string,
+  input: { confirmName: string; reason: string },
+): Promise<Document> {
+  const platform = ctx.platform;
+  const society = await platform.collection('societies').findOne({ _id: societyId });
+  if (!society) throw ApiError.notFound('Society');
+  confirmSocietyName(society, input.confirmName);
+  const reason = input.reason.trim();
+  if (reason.length < 3) throw ApiError.badRequest('A reason is required, and it is written to the audit trail.');
+
+  holdDestructiveLock(societyId);
+  try {
+    await logSystemAudit(platform, {
+      collection: 'platform_audit_logs',
+      societyId,
+      module: 'society',
+      action: 'society.deleted',
+      recordId: societyId,
+      recordType: 'society',
+      oldValue: { name: society.name, slug: society.slug, status: society.status, databaseName: society.databaseName },
+      newValue: { deleted: true, reason },
+      severity: 'CRITICAL',
+      actor: { id: ctx.actorId, name: ctx.actorName ?? null, type: 'PLATFORM' },
+    });
+
+    if (society.databaseName) {
+      await databases.dropSocietyDatabase({ id: societyId, databaseName: String(society.databaseName) });
+    }
+    const directory = await detachSociety(societyId);
+
+    const tickets = await platform.collection('support_tickets').find(
+      { societyId },
+      { projection: { _id: 1 }, limit: 10_000, includeDeleted: true },
+    );
+    for (const ticket of tickets) {
+      await platform.collection('support_ticket_messages').deleteMany({ ticketId: ticket._id }, { includeDeleted: true });
+    }
+    for (const name of ['subscriptions', 'platform_payments', 'support_tickets', 'gateway_orders', 'notification_templates', 'jobs']) {
+      await platform.collection(name).deleteMany({ societyId }, { includeDeleted: true });
+    }
+
+    await storage.removeSocietyFiles(societyId);
+    await storage.removeByUrl(society.logoUrl ? String(society.logoUrl) : null);
+
+    await platform.collection('societies').deleteOne({ _id: societyId }, { includeDeleted: true });
+    invalidateSociety(societyId);
+
+    return {
+      deleted: true,
+      societyId,
+      name: society.name,
+      slug: society.slug,
+      loginsRemoved: directory.entries,
+      summary: `${String(society.name)} deleted, including its database and administrator logins.`,
+    };
+  } finally {
+    releaseDestructiveLock(societyId);
+  }
 }
 
 async function uniqueSlug(platform: TenantDatabase, candidate: string, attempt = 0): Promise<string> {

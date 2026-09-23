@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { DEFAULT_TIER_MODULES, PLAN_TIERS, SOCIETY_LAYOUTS, permission, type ModuleKey } from '@colonize/shared';
 import { authenticatePlatform, requirePlatformContext } from '../../middleware/authenticate.js';
-import { requirePermission } from '../../middleware/permissions.js';
+import { requirePermission, requireRole } from '../../middleware/permissions.js';
 import { asyncHandler } from '../../middleware/errors.js';
 import { validate } from '../../middleware/validate.js';
 import { ok, created, paginated } from '../../utils/response.js';
@@ -438,6 +438,50 @@ router.post(
       body.reason,
     );
     return ok(res, result, `Society marked ${body.status.toLowerCase()}`);
+  }),
+);
+
+export const destructiveSocietySchema = z.object({
+  confirmName: z.string().trim().min(1).max(160),
+  reason: z.string().trim().min(3).max(500),
+});
+
+/**
+ * Clear every operational record and keep administrator logins.
+ * Super admin only — platform admin and support cannot wipe a society.
+ */
+router.post(
+  '/:id/clear-data',
+  requireRole('SUPER_ADMIN'),
+  requirePermission(permission('society', 'delete')),
+  validate(destructiveSocietySchema),
+  asyncHandler(async (req, res) => {
+    const ctx = requirePlatformContext(req);
+    const body = req.body as { confirmName: string; reason: string };
+    const result = await societiesService.clearSocietyData(
+      { platform: ctx.platformDatabase, actorId: ctx.principal.userId, actorName: ctx.principal.email ?? ctx.principal.fullName },
+      String(req.params.id),
+      body,
+    );
+    return ok(res, result, String(result.summary ?? 'Society data cleared'));
+  }),
+);
+
+/** Delete the society, its database and every login that belonged to it. Super admin only. */
+router.post(
+  '/:id/delete',
+  requireRole('SUPER_ADMIN'),
+  requirePermission(permission('society', 'delete')),
+  validate(destructiveSocietySchema),
+  asyncHandler(async (req, res) => {
+    const ctx = requirePlatformContext(req);
+    const body = req.body as { confirmName: string; reason: string };
+    const result = await societiesService.deleteSociety(
+      { platform: ctx.platformDatabase, actorId: ctx.principal.userId, actorName: ctx.principal.email ?? ctx.principal.fullName },
+      String(req.params.id),
+      body,
+    );
+    return ok(res, result, String(result.summary ?? 'Society deleted'));
   }),
 );
 

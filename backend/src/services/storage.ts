@@ -159,6 +159,16 @@ class LocalStorageProvider {
     await fsp.rm(this.resolve(key), { force: true });
   }
 
+  /** Remove every object stored under a society id. Never touches the shared `platform` prefix. */
+  async removePrefix(prefix: string): Promise<void> {
+    const safe = prefix.replace(/[^a-z0-9_-]/gi, '');
+    if (!safe || safe === 'platform') return;
+    const root = path.resolve(this.root());
+    const dir = path.resolve(root, safe);
+    if (dir !== root && !dir.startsWith(root + path.sep)) return;
+    await fsp.rm(dir, { recursive: true, force: true });
+  }
+
   async signedUrl(key: string, ttlSeconds = 300): Promise<string> {
     const expires = Date.now() + ttlSeconds * 1000;
     const signature = crypto
@@ -250,6 +260,31 @@ class S3StorageProvider {
     await client.send(new DeleteObjectCommand({ Bucket: env.S3_BUCKET, Key: key }));
   }
 
+  async removePrefix(prefix: string): Promise<void> {
+    const safe = prefix.replace(/[^a-z0-9_-]/gi, '');
+    if (!safe || safe === 'platform') return;
+    const { ListObjectsV2Command, DeleteObjectsCommand } = await import('@aws-sdk/client-s3');
+    const client = await this.client();
+    let token: string | undefined;
+    do {
+      const page = await client.send(
+        new ListObjectsV2Command({ Bucket: env.S3_BUCKET, Prefix: `${safe}/`, ContinuationToken: token }),
+      );
+      const keys = ((page.Contents ?? []) as Array<{ Key?: string }>)
+        .map((item) => item.Key)
+        .filter((key): key is string => Boolean(key));
+      if (keys.length > 0) {
+        await client.send(
+          new DeleteObjectsCommand({
+            Bucket: env.S3_BUCKET,
+            Delete: { Objects: keys.map((Key) => ({ Key })) },
+          }),
+        );
+      }
+      token = page.IsTruncated ? page.NextContinuationToken : undefined;
+    } while (token);
+  }
+
   async signedUrl(key: string, ttlSeconds = 300): Promise<string> {
     const { GetObjectCommand } = await import('@aws-sdk/client-s3');
     const { getSignedUrl } = await import('@aws-sdk/s3-request-presigner');
@@ -301,6 +336,30 @@ class StorageService {
 
   remove(key: string) {
     return this.provider.remove(key);
+  }
+
+  /** Uploads scoped to the society (complaint photos, documents). Logos live under `platform` and are left alone. */
+  async removeSocietyFiles(societyId: string): Promise<void> {
+    try {
+      await this.provider.removePrefix(societyId);
+    } catch (err) {
+      logger.warn({ err, societyId }, 'storage: society file cleanup failed');
+    }
+  }
+
+  /** Best-effort delete of one object addressed by a `/api/files/…` URL. */
+  async removeByUrl(url: string | null | undefined): Promise<void> {
+    if (!url) return;
+    const marker = '/api/files/';
+    const index = url.indexOf(marker);
+    if (index === -1) return;
+    const key = decodeURIComponent((url.slice(index + marker.length).split('?')[0] ?? '').trim());
+    if (!key || key.includes('..')) return;
+    try {
+      await this.provider.remove(key);
+    } catch (err) {
+      logger.warn({ err, key }, 'storage: file remove failed');
+    }
   }
 
   signedUrl(key: string, ttlSeconds = 300) {

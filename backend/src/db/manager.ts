@@ -241,6 +241,26 @@ class DatabaseManager {
     this.embeddedStores.clear();
   }
 
+  /**
+   * Close the cached connection and drop the tenant database.
+   * Idempotent: a database that is already gone still drops cleanly.
+   */
+  async dropSocietyDatabase(society: { id: string; databaseName: string }): Promise<void> {
+    const cached = this.tenants.get(society.id);
+    this.tenants.delete(society.id);
+    const db = cached?.db ?? this.makeDatabase(society.databaseName, 'tenant');
+    try {
+      await db.drop();
+    } finally {
+      await db.close().catch(() => undefined);
+      const store = this.embeddedStores.get(society.databaseName);
+      if (store) {
+        await store.drop().catch(() => undefined);
+        this.embeddedStores.delete(society.databaseName);
+      }
+    }
+  }
+
   /** Drop every embedded store — used by the test harness between suites. */
   async resetEmbedded(): Promise<void> {
     for (const store of this.embeddedStores.values()) await store.drop();
