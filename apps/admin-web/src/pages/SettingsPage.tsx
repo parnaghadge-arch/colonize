@@ -244,11 +244,11 @@ function ProfileTab({ editable }: { editable: boolean }) {
           editable ? (
             <div className="row">
               {form ? (
-                <Button size="sm" variant="ghost" onClick={() => setForm(null)}>
+                <Button size="sm" variant="ghost" type="button" onClick={() => setForm(null)}>
                   Discard
                 </Button>
               ) : (
-                <Button size="sm" onClick={() => setForm(readProfile(current))}>
+                <Button size="sm" type="button" onClick={() => setForm(readProfile(current))}>
                   Edit
                 </Button>
               )}

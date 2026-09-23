@@ -212,7 +212,7 @@ export function SocietyDetailPage() {
       </div>
 
       {tab === 'overview' ? <OverviewTab id={id} record={record} /> : null}
-      {tab === 'profile' ? <ProfileTab id={id} record={record} editable={canUpdate} /> : null}
+      {tab === 'profile' ? <ProfileTab id={id} record={record} editable={canUpdate} onSaved={() => { society.reload(); onboarding.reload(); }} /> : null}
       {tab === 'onboarding' ? <OnboardingTab id={id} record={record} editable={canUpdate} /> : null}
       {tab === 'plan' ? <PlanTab id={id} record={record} editable={canSubscription} /> : null}
       {tab === 'admins' ? <AdminsTab id={id} canInvite={canManage || can('user:create')} canManage={canManage} /> : null}
@@ -346,7 +346,7 @@ const NULLABLE: readonly ProfileKey[] = [
 
 const TIMEZONES = ['Asia/Kolkata', 'Asia/Dubai', 'Asia/Singapore', 'Europe/London', 'Europe/Berlin', 'America/New_York', 'America/Los_Angeles', 'Australia/Sydney', 'UTC'];
 
-function ProfileTab({ id, record, editable }: { id: string; record: SocietyDetail; editable: boolean }) {
+function ProfileTab({ id, record, editable, onSaved }: { id: string; record: SocietyDetail; editable: boolean; onSaved: () => void }) {
   const toast = useToast();
   const baseline = useMemo(() => {
     const out = {} as Record<ProfileKey, string>;
@@ -394,6 +394,9 @@ function ProfileTab({ id, record, editable }: { id: string; record: SocietyDetai
       toast.success(result?.layoutModulesRemoved?.length ? `Society updated — ${result.layoutModulesRemoved.join(', ')} disabled for this layout` : 'Society updated');
       setForm(null);
       setExtra(null);
+      // The record above comes from the parent's fetch — without a reload the screen keeps
+      // showing the pre-edit values, which reads as "the edit did nothing".
+      onSaved();
     } catch (err) {
       setError(err);
       toast.error(err);
@@ -449,6 +452,7 @@ function ProfileTab({ id, record, editable }: { id: string; record: SocietyDetai
                 <Button
                   size="sm"
                   variant="ghost"
+                  type="button"
                   onClick={() => {
                     setForm(null);
                     setExtra(null);
@@ -459,6 +463,7 @@ function ProfileTab({ id, record, editable }: { id: string; record: SocietyDetai
               ) : (
                 <Button
                   size="sm"
+                  type="button"
                   onClick={() => {
                     setForm({ ...baseline });
                     setExtra({ ...extraBase });
@@ -975,11 +980,12 @@ function PlanTab({ id, record, editable }: { id: string; record: SocietyDetail; 
               <Button
                 size="sm"
                 variant="ghost"
+                type="button"
                 onClick={() => setForm((p) => ({ ...p, modules: Array.from(new Set([...p.modules, ...(currentModules as string[])])) }))}
               >
                 Keep current modules
               </Button>
-              <Button size="sm" variant="ghost" onClick={() => setForm((p) => ({ ...p, modules: [] }))}>
+              <Button size="sm" variant="ghost" type="button" onClick={() => setForm((p) => ({ ...p, modules: [] }))}>
                 Use the tier default set
               </Button>
             </div>
