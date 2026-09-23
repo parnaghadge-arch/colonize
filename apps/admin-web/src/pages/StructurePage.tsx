@@ -1,4 +1,5 @@
 import { useMemo, useState, type FormEvent } from 'react';
+import type { StructureSetupPayload } from '@colonize/shared';
 import { api, ApiError } from '../lib/api.ts';
 import { useList, useResource } from '../lib/useResource.ts';
 import {
@@ -18,9 +19,29 @@ import {
   useToast,
   type Column,
 } from '../components/ui.tsx';
+import { StructureSetupForm } from '../components/StructureSetupForm.tsx';
 import { number } from '../lib/format.ts';
 import { useSession } from '../lib/session.tsx';
 import type { StructureTreeNode, Unit } from '../lib/types.ts';
+
+const UNIT_TYPE_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: 'FLAT', label: 'Apartment' },
+  { value: 'HOUSE', label: 'House' },
+  { value: 'PLOT', label: 'Vacant plot' },
+  { value: 'TOWER', label: 'Tower' },
+  { value: 'VILLA', label: 'Villa' },
+  { value: 'BUNGALOW', label: 'Bungalow' },
+  { value: 'PENTHOUSE', label: 'Penthouse' },
+  { value: 'STUDIO', label: 'Studio' },
+  { value: 'SHOP', label: 'Shop' },
+  { value: 'OFFICE', label: 'Office' },
+  { value: 'GARAGE', label: 'Garage' },
+  { value: 'BUILDING', label: 'Building' },
+];
+
+function unitTypeLabel(type: string): string {
+  return UNIT_TYPE_OPTIONS.find((option) => option.value === type)?.label ?? type.split('_').join(' ');
+}
 
 interface TreeResponse {
   items: StructureTreeNode[];
@@ -38,6 +59,8 @@ export function StructurePage() {
   const toast = useToast();
 
   const tree = useResource<TreeResponse>('/structure/tree');
+  const society = useResource<{ society?: { layout?: string | null } }>('/society');
+  const layout = society.data?.society?.layout ?? null;
   const [buildingId, setBuildingId] = useState<string>('');
   const [wingId, setWingId] = useState<string>('');
   const [search, setSearch] = useState('');
@@ -52,6 +75,8 @@ export function StructurePage() {
 
   const [dialog, setDialog] = useState<null | 'building' | 'wing' | 'unit' | 'generate'>(null);
   const [error, setError] = useState<unknown>(null);
+  const [setupError, setSetupError] = useState<unknown>(null);
+  const [setupBusy, setSetupBusy] = useState(false);
   const [editTarget, setEditTarget] = useState<null | { kind: 'building' | 'wing' | 'unit'; data: Record<string, unknown> }>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
 
@@ -90,6 +115,22 @@ export function StructurePage() {
     return { buildings: buildings.length, wings: totalWings, floors: totalFloors, units: totalUnits };
   }, [buildings]);
 
+  async function addUnits(payload: StructureSetupPayload) {
+    setSetupBusy(true);
+    setSetupError(null);
+    try {
+      const result = await api.post<{ summary?: string }>('/structure/setup', payload);
+      toast.success(result.summary ?? 'Units added');
+      tree.reload();
+      units.reload();
+    } catch (err) {
+      setSetupError(err);
+      throw err;
+    } finally {
+      setSetupBusy(false);
+    }
+  }
+
   function afterMutation(message: string) {
     toast.success(message);
     setDialog(null);
@@ -104,8 +145,8 @@ export function StructurePage() {
     { key: 'label', header: 'Unit', render: (u) => <b>{u.label || u.unitNumber}</b> },
     { key: 'building', header: 'Building', render: (u) => u.building?.name ?? '—' },
     { key: 'wing', header: 'Wing', render: (u) => u.wing?.name ?? '—' },
-    { key: 'floor', header: 'Floor', align: 'right', render: (u) => number(u.floorNumber) },
-    { key: 'type', header: 'Type', render: (u) => <Pill>{u.type}</Pill> },
+    { key: 'floor', header: 'Floor', align: 'right', render: (u) => (u.floorNumber < 0 ? '—' : number(u.floorNumber)) },
+    { key: 'type', header: 'Type', render: (u) => <Pill>{unitTypeLabel(u.type)}</Pill> },
     { key: 'status', header: 'Status', render: (u) => <StatusPill status={u.status} /> },
     {
       key: 'occupancy',
@@ -159,6 +200,22 @@ export function StructurePage() {
     <div className="stack">
       {tree.error ? <ErrorAlert error={tree.error} /> : null}
 
+      {can('unit:create') || can('building:create') ? (
+        <Card
+          title={buildings.length === 0 ? 'Add units' : 'Add more units'}
+          subtitle="A few questions, then the towers, plots and apartments are created for you"
+        >
+          {society.loading && !layout ? (
+            <Loading label="Checking how this society is laid out…" />
+          ) : (
+            <>
+              {society.error ? <ErrorAlert error={society.error} /> : null}
+              <StructureSetupForm layout={layout} busy={setupBusy} error={setupError} onSubmit={addUnits} />
+            </>
+          )}
+        </Card>
+      ) : null}
+
       <div className="tiles">
         <div className="tile tile--brand">
           <div className="tile__label">Buildings</div>
@@ -184,8 +241,8 @@ export function StructurePage() {
         actions={
           can('building:create') ? (
             <div className="row">
-              <Button size="sm" onClick={() => setDialog('building')}>
-                Add building
+              <Button size="sm" type="button" onClick={() => setDialog('building')}>
+                Add one building
               </Button>
               {buildingId ? (
                 <Button size="sm" variant="primary" onClick={() => setDialog('wing')}>
@@ -197,7 +254,10 @@ export function StructurePage() {
         }
       >
         {buildings.length === 0 ? (
-          <EmptyState title="No buildings yet" hint="Add the first tower or block to start building the society." />
+          <EmptyState
+            title="No buildings yet"
+            hint="Use Add units above — it only asks what this society's layout needs. Add one building is for something custom."
+          />
         ) : (
           <div className="grid grid--2">
             {buildings.map((building) => (
@@ -748,9 +808,9 @@ function UnitForm({
           </Field>
           <Field label="Type">
             <Select value={type} onChange={(e) => setType(e.target.value)}>
-              {['FLAT', 'VILLA', 'PENTHOUSE', 'SHOP', 'OFFICE', 'GARAGE', 'STUDIO', 'HOUSE', 'BUNGALOW', 'BUILDING', 'TOWER'].map((t) => (
-                <option key={t} value={t}>
-                  {t}
+              {UNIT_TYPE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
                 </option>
               ))}
             </Select>
@@ -1062,9 +1122,9 @@ function EditUnitForm({ data, onClose, onDone, error, setError }: FormProps & { 
         <div className="form-row">
           <Field label="Type">
             <Select value={type} onChange={(e) => setType(e.target.value)}>
-              {['FLAT', 'VILLA', 'PENTHOUSE', 'SHOP', 'OFFICE', 'GARAGE', 'STUDIO', 'HOUSE', 'BUNGALOW', 'BUILDING', 'TOWER'].map((t) => (
-                <option key={t} value={t}>
-                  {t.split('_').join(' ')}
+              {UNIT_TYPE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
                 </option>
               ))}
             </Select>

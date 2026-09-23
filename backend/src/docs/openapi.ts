@@ -750,6 +750,19 @@ export function buildOpenApiDocument(): Record<string, unknown> {
     get: op({ tag: 'Structure', summary: 'Occupancy and inventory counts', operationId: 'structureCounts',
       responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Counts'), ...STANDARD_ERRORS } }),
   };
+  paths[`${S}/setup`] = {
+    post: op({ tag: 'Structure', summary: 'Guided setup — towers, apartments and plots', operationId: 'setupStructure',
+      description: 'The short add-units form. A building society sends towers (name + apartment count). A plot society sends plots, each vacant, a house, or a tower with an apartment count. A mixed society sends both. Apartment numbers (101, 102, 201…) are filled in from apartmentsPerFloor (default 4). If any name or plot number already exists, nothing is written.',
+      body: {
+        type: 'object',
+        properties: {
+          towers: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, apartments: { type: 'integer' } }, required: ['name', 'apartments'] } },
+          plots: { type: 'array', items: { type: 'object', properties: { number: { type: 'integer' }, kind: { type: 'string', enum: ['VACANT', 'HOUSE', 'TOWER'] }, apartments: { type: 'integer' } }, required: ['number', 'kind'] } },
+          apartmentsPerFloor: { type: 'integer', default: 4, minimum: 1, maximum: 20 },
+        },
+      },
+      responses: { 201: okJson(envelope({ type: 'object', additionalProperties: true }), 'Units created'), ...STANDARD_ERRORS } }),
+  };
   paths[`${S}/import/templates`] = {
     get: op({ tag: 'Structure', summary: 'Download the CSV/Excel import template', operationId: 'importTemplates',
       responses: { 200: { description: 'Workbook', content: { 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': { schema: { type: 'string', format: 'binary' } } } }, ...STANDARD_ERRORS } }),

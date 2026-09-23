@@ -6,9 +6,11 @@ import { authenticate, requireContext } from '../../middleware/authenticate.js';
 import { requirePermission } from '../../middleware/permissions.js';
 import { asyncHandler } from '../../middleware/errors.js';
 import { validate } from '../../middleware/validate.js';
+import { logger } from '../../config/logger.js';
 import { ok, created } from '../../utils/response.js';
 import { parseCsv, RESIDENT_IMPORT_ALIASES, UNIT_IMPORT_ALIASES } from '../../utils/csv.js';
 import * as structureService from './structureService.js';
+import { refreshSocietyCounters } from '../societies/societiesService.js';
 
 /**
  * Society structure endpoints (§5, §10, §41).
@@ -211,6 +213,30 @@ structureRouter.get(
       { buildingId: req.query.buildingId ? String(req.query.buildingId) : undefined },
     );
     return ok(res, { items: tree }, 'Structure tree fetched');
+  }),
+);
+
+/**
+ * The short "add units" form. Building societies send towers, plot societies send plots
+ * (vacant / house / tower), mixed societies send both. Apartment numbers are filled in.
+ */
+structureRouter.post(
+  '/setup',
+  authenticate(),
+  requirePermission(permission('unit', 'create'), permission('unit', 'manage'), permission('building', 'create')),
+  validate(structureService.structureSetupBodySchema),
+  asyncHandler(async (req, res) => {
+    const ctx = requireContext(req);
+    const result = await structureService.setupStructure(
+      { db: ctx.db!, societyId: ctx.society!.id, actorId: ctx.principal.userId },
+      req.body,
+    );
+    // The units are already written. A counter refresh must not turn a successful save into an
+    // error the admin then retries — the retry would be rejected as "already exists".
+    await refreshSocietyCounters(ctx.society!.id).catch((err) => {
+      logger.warn({ err, societyId: ctx.society!.id }, 'structure setup: society counters were not refreshed');
+    });
+    return created(res, result, String(result.summary ?? 'Units added'));
   }),
 );
 

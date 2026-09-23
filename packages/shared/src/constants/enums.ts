@@ -20,18 +20,19 @@ export type SocietyType = (typeof SOCIETY_TYPES)[number];
 
 /**
  * Physical layout of the development — how the society is formed:
- *  • BUILDING — towers/apartments: buildings → wings → floors → units, multi-gate, full module set
- *  • PLOT     — plots / row houses: flat plot structure (one "Plots" building, no wings/floors),
- *               single main gate, so the multi-gate module is off by default (re-enable per society)
- *  • MIXED    — both in one development: full structure and module set
+ *  • BUILDING — towers/apartments. Setup asks how many towers and how many apartments in each.
+ *  • PLOT     — plots / houses. Setup asks how many plots; each plot is vacant, a house, or a tower
+ *               (a tower then asks how many apartments). One street gate, so multi-gate is off
+ *               by default (re-enable per society).
+ *  • MIXED    — both in one development: the setup asks both sets of questions.
  */
 export const SOCIETY_LAYOUTS = ['BUILDING', 'PLOT', 'MIXED'] as const;
 export type SocietyLayout = (typeof SOCIETY_LAYOUTS)[number];
 
 export const SOCIETY_LAYOUT_LABELS: Record<SocietyLayout, string> = {
-  BUILDING: 'Building (towers / apartments)',
-  PLOT: 'Plot / row house',
-  MIXED: 'Both (mixed development)',
+  BUILDING: 'Building (Tower / apartments)',
+  PLOT: 'Layout (Plot / houses)',
+  MIXED: 'Both',
 };
 
 /** Modules that do not apply to a flat plot/row-house layout. Per-society modules are editable, so this is a default, not a lock. */

@@ -1,4 +1,5 @@
-import { formatTitle } from '@colonize/shared';
+import { formatSetupSummary, formatTitle, planApartmentNumbers, type SetupCounts } from '@colonize/shared';
+import { z } from 'zod';
 import type { Document, TenantDatabase } from '../../db/drivers/types.js';
 import { newId } from '../../db/ids.js';
 import { ApiError } from '../../utils/errors.js';
@@ -180,7 +181,10 @@ export async function createUnit(ctx: StructureContext, input: CreateUnitInput):
     floorId = floor ? String(floor._id) : null;
   }
 
-  const label = await buildUnitLabel(building, wingId, unitNumber, floorNumber, ctx);
+  const label =
+    typeof input.label === 'string' && input.label.trim()
+      ? input.label.trim()
+      : await buildUnitLabel(building, wingId, unitNumber, floorNumber, ctx);
   const doc = await ctx.db.collection('units').create({
     _id: newId('units'),
     societyId: ctx.societyId,
@@ -643,6 +647,268 @@ export async function refreshUnitCounters(ctx: StructureContext, unitId: string)
       },
     },
   );
+}
+
+/* --------------------------- guided structure setup ------------------------ */
+
+/**
+ * The short form behind "add units": towers + apartment counts, and/or plots that are a vacant
+ * plot, a house, or a tower with its own apartments. Floors and unit numbers are filled in
+ * (101, 102… , 4 per floor by default) so the form never asks about them.
+ *
+ * Existing names and plot numbers are rejected up front and nothing is written — a second click
+ * must not silently skip half the request and look like the save did nothing.
+ */
+export const structureSetupBodySchema = z
+  .object({
+    towers: z
+      .array(
+        z.object({
+          name: z.string().trim().min(1).max(60),
+          apartments: z.coerce.number().int().min(1).max(2000),
+        }),
+      )
+      .max(100)
+      .default([]),
+    plots: z
+      .array(
+        z.object({
+          number: z.coerce.number().int().min(1).max(10_000),
+          kind: z.enum(['VACANT', 'HOUSE', 'TOWER']),
+          apartments: z.coerce.number().int().min(1).max(500).optional(),
+        }),
+      )
+      .max(2000)
+      .default([]),
+    apartmentsPerFloor: z.coerce.number().int().min(1).max(20).default(4),
+  })
+  .superRefine((value, ctx) => {
+    if (value.towers.length + value.plots.length === 0) {
+      ctx.addIssue({ code: 'custom', message: 'Add at least one tower or one plot.' });
+    }
+    const names = new Set<string>();
+    value.towers.forEach((tower, index) => {
+      const key = tower.name.trim().toLowerCase();
+      if (names.has(key)) {
+        ctx.addIssue({ code: 'custom', message: `Two towers are both named "${tower.name}".`, path: ['towers', index, 'name'] });
+      }
+      names.add(key);
+    });
+    const numbers = new Set<number>();
+    value.plots.forEach((plot, index) => {
+      if (numbers.has(plot.number)) {
+        ctx.addIssue({ code: 'custom', message: `Plot ${plot.number} is listed twice.`, path: ['plots', index, 'number'] });
+      }
+      numbers.add(plot.number);
+      if (plot.kind === 'TOWER' && !plot.apartments) {
+        ctx.addIssue({
+          code: 'custom',
+          message: `Plot ${plot.number} is a tower — say how many apartments it has.`,
+          path: ['plots', index, 'apartments'],
+        });
+      }
+    });
+  });
+
+export type StructureSetupInput = z.infer<typeof structureSetupBodySchema>;
+
+export function parseStructureSetup(input: unknown): StructureSetupInput {
+  const parsed = structureSetupBodySchema.safeParse(input ?? {});
+  if (!parsed.success) {
+    const issues = parsed.error.issues.slice(0, 8);
+    throw ApiError.validation(
+      issues[0]?.message ?? 'Check the structure details',
+      issues.map((issue) => ({ field: issue.path.join('.') || undefined, message: issue.message, code: issue.code })),
+    );
+  }
+  return parsed.data;
+}
+
+function towerCode(name: string, index: number): string {
+  const numbered = /^(?:tower|block)\s*([a-z0-9]{1,8})$/i.exec(name.trim());
+  const raw = numbered?.[1]
+    ? `T${numbered[1].toUpperCase()}`
+    : name.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8) || `T${index + 1}`;
+  const code = raw.slice(0, 12);
+  if (code === 'PLOTS') {
+    throw ApiError.badRequest(`"${name}" would use the reserved code PLOTS. Rename that tower.`);
+  }
+  return code;
+}
+
+async function addApartments(
+  ctx: StructureContext,
+  buildingId: string,
+  apartments: number,
+  perFloor: number,
+  dryRun: boolean,
+): Promise<string[]> {
+  const plan = planApartmentNumbers(apartments, perFloor);
+  const labels: string[] = [];
+  if (!dryRun && plan.length > 0) {
+    await createFloorsForBuilding(ctx, buildingId, null, plan[plan.length - 1]?.floor ?? 1);
+  }
+  for (const item of plan) {
+    if (dryRun) {
+      labels.push(item.unitNumber);
+      continue;
+    }
+    const unit = await createUnit(ctx, {
+      buildingId,
+      floorNumber: item.floor,
+      unitNumber: item.unitNumber,
+      type: 'FLAT',
+      status: 'VACANT',
+      occupancyType: 'VACANT',
+    });
+    labels.push(String(unit.label ?? item.unitNumber));
+  }
+  return labels;
+}
+
+export async function setupStructure(
+  ctx: StructureContext,
+  input: unknown,
+  dryRun = false,
+): Promise<Document> {
+  const setup = parseStructureSetup(input);
+  const perFloor = setup.apartmentsPerFloor;
+
+  const towers = setup.towers.map((tower, index) => ({
+    name: tower.name.trim(),
+    apartments: tower.apartments,
+    code: towerCode(tower.name, index),
+  }));
+  const plotTowers = setup.plots
+    .filter((plot) => plot.kind === 'TOWER')
+    .map((plot) => ({
+      number: plot.number,
+      apartments: Number(plot.apartments ?? 0),
+      name: `Plot ${plot.number} Tower`,
+      code: `PT${plot.number}`.slice(0, 12),
+    }));
+  const plotUnits = setup.plots.filter((plot) => plot.kind !== 'TOWER');
+
+  const codes = new Map<string, string>();
+  const claim = (code: string, label: string) => {
+    const previous = codes.get(code);
+    if (previous) {
+      throw ApiError.badRequest(`${previous} and ${label} would both be saved as ${code}. Rename one of them.`);
+    }
+    codes.set(code, label);
+  };
+  for (const tower of towers) claim(tower.code, tower.name);
+  for (const tower of plotTowers) claim(tower.code, tower.name);
+
+  const existing = await ctx.db.collection('buildings').find({ societyId: ctx.societyId }, { limit: 5000 });
+  const byCode = new Map(existing.map((building) => [String(building.code ?? '').toUpperCase(), building]));
+  const conflicts: string[] = [];
+  for (const [code, label] of codes) {
+    if (byCode.has(code)) conflicts.push(label);
+  }
+  const plotsBuilding = byCode.get('PLOTS');
+  if (plotsBuilding && plotUnits.length > 0) {
+    const wanted = plotUnits.map((plot) => `P-${plot.number}`);
+    const found = await ctx.db.collection('units').find(
+      { societyId: ctx.societyId, buildingId: plotsBuilding._id, unitNumber: { $in: wanted } },
+      { limit: wanted.length },
+    );
+    for (const unit of found) conflicts.push(`Plot ${String(unit.unitNumber).replace(/^P-/, '')}`);
+  }
+  if (conflicts.length > 0) {
+    const shown = conflicts.slice(0, 8).join(', ');
+    const more = conflicts.length > 8 ? ` and ${conflicts.length - 8} more` : '';
+    throw ApiError.conflict(
+      `Nothing was saved — these already exist: ${shown}${more}. Change the names or plot numbers, or add only what is new.`,
+    );
+  }
+
+  const counts: SetupCounts = {
+    towers: towers.length,
+    towerApartments: towers.reduce((sum, tower) => sum + tower.apartments, 0),
+    houses: plotUnits.filter((plot) => plot.kind === 'HOUSE').length,
+    vacantPlots: plotUnits.filter((plot) => plot.kind === 'VACANT').length,
+    plotTowers: plotTowers.length,
+    plotApartments: plotTowers.reduce((sum, tower) => sum + tower.apartments, 0),
+  };
+  const summary = formatSetupSummary(counts, 'past').replace(/^Added/, dryRun ? 'Would add' : 'Added');
+  const sample: string[] = [];
+  const remember = (label: string) => {
+    if (sample.length < 8) sample.push(label);
+  };
+
+  if (!dryRun) {
+    for (const tower of towers) {
+      const floors = planApartmentNumbers(tower.apartments, perFloor);
+      const building = await createBuilding(ctx, {
+        name: tower.name,
+        code: tower.code,
+        type: 'TOWER',
+        totalFloors: floors[floors.length - 1]?.floor ?? 1,
+        unitsPerFloor: Math.min(perFloor, tower.apartments),
+        hasWings: false,
+        createFloors: false,
+        order: towers.indexOf(tower),
+      });
+      for (const label of await addApartments(ctx, String(building._id), tower.apartments, perFloor, false)) remember(label);
+    }
+    for (const tower of plotTowers) {
+      const floors = planApartmentNumbers(tower.apartments, perFloor);
+      const building = await createBuilding(ctx, {
+        name: tower.name,
+        code: tower.code,
+        type: 'TOWER',
+        totalFloors: floors[floors.length - 1]?.floor ?? 1,
+        unitsPerFloor: Math.min(perFloor, tower.apartments),
+        hasWings: false,
+        createFloors: false,
+      });
+      for (const label of await addApartments(ctx, String(building._id), tower.apartments, perFloor, false)) remember(label);
+    }
+    if (plotUnits.length > 0) {
+      let holder = plotsBuilding;
+      if (!holder) {
+        holder = await createBuilding(ctx, {
+          name: 'Plots',
+          code: 'PLOTS',
+          type: 'VILLA_ROW',
+          totalFloors: 0,
+          unitsPerFloor: 0,
+          hasWings: false,
+          createFloors: false,
+        });
+      }
+      for (const plot of plotUnits) {
+        const unit = await createUnit(ctx, {
+          buildingId: String(holder._id),
+          unitNumber: `P-${plot.number}`,
+          floorNumber: -1,
+          type: plot.kind === 'VACANT' ? 'PLOT' : 'HOUSE',
+          status: 'VACANT',
+          occupancyType: 'VACANT',
+          label: `Plot ${plot.number}`,
+        });
+        remember(String(unit.label ?? `Plot ${plot.number}`));
+      }
+    }
+  } else {
+    for (const tower of towers) remember(`${tower.name} · ${planApartmentNumbers(1, perFloor)[0]?.unitNumber ?? '101'}`);
+    for (const plot of plotUnits) remember(`Plot ${plot.number}`);
+    for (const tower of plotTowers) remember(tower.name);
+  }
+
+  return {
+    mode: 'setup',
+    dryRun,
+    unitsCreated: counts.houses + counts.vacantPlots + counts.towerApartments + counts.plotApartments,
+    towersCreated: towers.length,
+    housesCreated: counts.houses,
+    vacantPlotsCreated: counts.vacantPlots,
+    plotTowersCreated: counts.plotTowers,
+    apartmentsCreated: counts.towerApartments + counts.plotApartments,
+    summary,
+    sample,
+  };
 }
 
 function groupBy<T>(items: T[], key: (item: T) => string): Record<string, T[]> {

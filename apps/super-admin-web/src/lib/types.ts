@@ -36,9 +36,9 @@ export const SOCIETY_LAYOUTS = ['BUILDING', 'PLOT', 'MIXED'] as const;
 export type SocietyLayout = (typeof SOCIETY_LAYOUTS)[number];
 
 export const SOCIETY_LAYOUT_LABELS: Record<SocietyLayout, string> = {
-  BUILDING: 'Building (towers / apartments)',
-  PLOT: 'Plot / row house',
-  MIXED: 'Both (mixed development)',
+  BUILDING: 'Building (Tower / apartments)',
+  PLOT: 'Layout (Plot / houses)',
+  MIXED: 'Both',
 };
 
 /** Legal/organizational form of the society — editable in the Profile tab. Mirrors `SOCIETY_TYPES` in @colonize/shared. */

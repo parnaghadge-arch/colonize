@@ -18,7 +18,7 @@ import { hashPassword } from '../../services/crypto.js';
 import { logger } from '../../config/logger.js';
 import { logSystemAudit } from '../../services/audit.js';
 import { updateSettings } from '../../services/settings.js';
-import { importUnitsFromCsv, createBuilding, createWing, generateUnits, type StructureContext } from '../structure/structureService.js';
+import { importUnitsFromCsv, createBuilding, createWing, generateUnits, setupStructure, type StructureContext } from '../structure/structureService.js';
 import { upsertMembership, rebuildForSociety } from '../../services/identityDirectory.js';
 import { invalidateSociety } from '../../services/cache.js';
 
@@ -223,7 +223,7 @@ export async function getOnboardingState(societyId: string): Promise<Document> {
     counts: { buildings, units, users, gates, settings },
     checklist: [
       { key: 'profile', label: 'Society profile, city and contact details', done: Boolean(society.city && (society.contactEmail || society.contactPhone)), required: true },
-      { key: 'structure', label: 'Buildings, wings, floors and units', done: units > 0, required: true },
+      { key: 'structure', label: 'At least one unit — tower apartments, houses or plots', done: units > 0, required: true },
       { key: 'admin', label: 'At least one administrator who can sign in', done: users > 0, required: true },
       { key: 'gates', label: 'Security gates for the guard app', done: gates > 0, required: false },
       { key: 'settings', label: 'Visitor, complaint and billing rules', done: settings > 0, required: false },
@@ -267,13 +267,15 @@ export async function runOnboardingStep(
     }
 
     case 'STRUCTURE': {
-      if (typeof payload.structureCsv === 'string' && payload.structureCsv.trim()) {
+      if (payload.setup && typeof payload.setup === 'object') {
+        result = await setupStructure(structureCtx, payload.setup, dryRun);
+      } else if (typeof payload.structureCsv === 'string' && payload.structureCsv.trim()) {
         const imported = await importUnitsFromCsv(structureCtx, payload.structureCsv, { dryRun });
         result = { mode: 'csv', ...imported, units: undefined };
       } else if (Array.isArray(payload.buildings)) {
         result = await applyStructureDeclaration(structureCtx, payload.buildings as Document[], dryRun);
       } else {
-        throw ApiError.badRequest('Provide either `buildings` or `structureCsv` for the STRUCTURE step');
+        throw ApiError.badRequest('Provide `setup`, `buildings` or `structureCsv` for the STRUCTURE step');
       }
       break;
     }

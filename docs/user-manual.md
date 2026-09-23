@@ -276,10 +276,24 @@ module:
 The society at a glance: occupancy, collections, open complaints, recent
 activity.
 
-### 4.2 Structure — buildings, wings, floors, units (fully editable)
+### 4.2 Structure — add units, then the hierarchy
 
 The physical hierarchy every unit hangs off: **building → (wing) → floor →
-unit**.
+unit**. Adding units does not start there. The page asks only what the
+society's layout needs:
+
+- **Building (Tower / apartments)** — how many towers, and how many apartments
+  in each. Tick "different names or counts" only when the towers are not the
+  same. Apartments are numbered 101, 102… (4 per floor, changeable).
+- **Layout (Plot / houses)** — how many plots, then what is on each: **vacant
+  plot**, **house**, or **tower**. A tower asks how many apartments. If every
+  plot is the same, one choice covers all of them; "some plots are different"
+  opens a row per plot (or, above 40 plots, a short list of the exceptions).
+- **Both** — the two sections above. Leave a count at zero to skip that side.
+
+A preview sentence ("This will add 2 towers (16 apartments) and 8 houses.")
+sits above the button, so nothing is saved blind. Names or plot numbers that
+already exist are rejected and nothing is written.
 
 - **Tiles** at the top: totals for buildings / wings / floors / units.
 - **Buildings and wings** card: one card per building (code, unit count,
@@ -295,22 +309,21 @@ unit**.
   VACANT / OCCUPIED / LOCKED / UNDER_MAINTENANCE — carpet area, bedrooms)
   and **Delete**. The four building-style types are for plot/row-house
   societies, where one *unit* is a whole structure standing on a plot.
-- **Bulk generate**: pick building (and wing), floors × units-per-floor,
-  numbering pattern and prefix — creates missing floors and numbered units in
-  one call. This is how a plot society is normally formed (one "Plots"
-  building, 1 floor, N units, prefix `PH`).
+- **Add one building / bulk generate** stay available for a custom case the
+  short form does not cover (a wing, a shop, a one-off unit). They are not
+  the normal way to form a society.
 - **CSV import**: download a template, upload a spreadsheet; a **preview**
   step shows exactly what would be created before anything is written.
 - Edits and deletes are permission-checked (`building:*`, `wing:*`, `unit:*`)
   and audited; the unit counters on the society record are refreshed after
   every structural change.
 
-> **Note on "plots".** A plot is a unit in a single-floor building named
-> *Plots*; its **type** records what stands on the plot (HOUSE, VILLA,
-> BUNGALOW, BUILDING, TOWER, …). Nothing about billing, residents or passes
-> treats it differently from a flat — only the `multiGate` module is omitted
-> for plot societies. To vary a plot from its neighbours, edit that unit's
-> type.
+> **Note on "plots".** A vacant plot or a house is a unit in a building named
+> *Plots* (labelled "Plot 12"). A plot that is a tower is its own building
+> ("Plot 12 Tower") with apartment units inside it, numbered 101, 102….
+> Nothing about billing, residents or passes treats a plot unit differently
+> from a flat — only the `multiGate` module is omitted for plot societies.
+> Change one plot later by editing that unit, or add more from the same form.
 
 ### 4.3 Residents — add, edit, delete
 
@@ -407,12 +420,13 @@ The form collects:
   later shows (super-admin list & detail, the society console sidebar, the
   mobile apps), so an off-shape upload can never distort anything.
 - **Opening plan** (FREE/BASIC/STANDARD/PREMIUM/ENTERPRISE).
-- **Society layout** — the new "society type" question:
-  - **Building (towers / apartments)** — the full module set for the plan.
-  - **Plot / row house** — formed **without the multi-gate module** (one
-    street gate); everything else as per plan.
-  - **Both (mixed development)** — full set; structure later holds both
-    towers and plots.
+- **Society layout** — three buttons, not a dropdown:
+  - **Building (Tower / apartments)** — the full module set for the plan.
+    Adding units later asks how many towers and how many apartments in each.
+  - **Layout (Plot / houses)** — formed **without the multi-gate module** (one
+    street gate); everything else as per plan. Adding units asks how many
+    plots, and whether each is a vacant plot, a house, or a tower.
+  - **Both** — full set. Adding units asks both questions.
 - **First administrator** (optional but strongly recommended): name, email,
   phone, and a **password set now** (a blank password creates an account
   nobody can sign in to — the form warns about this).
@@ -435,12 +449,10 @@ retry after a failure.
 **activatable** when every required step is done:
 
 1. **Database provisioned**
-2. **Structure declared** — at least **one unit** exists (the onboarding tab
-   offers the **quick plot setup** for plot societies: enter N plots, pick
-   what stands on each plot — **house / villa / bungalow / building /
-   tower** — and the platform declares a single *Plots* building with units
-   PH1…PHN, each unit carrying that structure type; vary a plot afterwards
-   by editing the unit)
+2. **Structure declared** — at least **one unit** exists. The onboarding
+   **Structure** step is the same short form the society admin sees, limited
+   to the layout chosen above (towers, plots, or both). A dry run previews
+   the sentence ("Would add 2 towers…") without writing.
 3. **Administrator exists** — at least one user with an admin role
 4. **Activation** — flips the society to ACTIVE, flips its PENDING
    administrators to ACTIVE, re-syncs the login directory, and completes
@@ -465,7 +477,8 @@ Once activated, the same phone/email + password work immediately.
 
 The **Profile** tab is now a full editor:
 
-- **Society layout** — change Building ↔ Plot/row house ↔ Both. Changing to a
+- **Society layout** — change Building ↔ Layout (plots / houses) ↔ Both, using
+  the same three buttons as onboarding. Changing to a
   plot layout **removes the modules the layout excludes** (`multiGate`) from
   the society's module set **and re-syncs the tenant entitlement mirror**, so
   the change takes effect immediately. The response and toast name exactly
@@ -614,8 +627,8 @@ operator fills the form (layout = Plot) ──► POST /platform/societies
    │  creates the admin user (status PENDING) in the tenant DB
    │  registers them in the platform identity directory
    ▼
-operator records STRUCTURE (quick plot setup: 42 plots)
-   │  creates "Plots" building + PH1…PH42
+operator records STRUCTURE (how many towers / plots, what is on each plot)
+   │  creates towers, apartment numbers, houses and vacant plots
    ▼
 POST /:id/activate
    │  units ≥ 1 ✓  admins ≥ 1 ✓
@@ -698,7 +711,7 @@ cancellation frees the slot (availability updates in realtime)
 ### 8.7 Changing a society's layout afterwards
 
 ```
-operator: Society → Profile → Edit → layout: Building → Plot/row house
+operator: Society → Profile → Edit → layout: Building → Layout (Plot / houses)
    │  multiGate dropped from modules + subscription.modules
    │  tenant mirror re-synced, society cache invalidated
    │  audit entry (old → new, modules removed)
@@ -808,7 +821,7 @@ errors use `{ success: false, message, code }` with a stable error code
 | Term | Meaning |
 |---|---|
 | **Society** | A housing society / complex / gated community / plot development — one tenant, one database |
-| **Layout** | How the society is physically formed: Building / Plot-row house / Both |
+| **Layout** | How the society is physically formed: Building (Tower / apartments) / Layout (Plot / houses) / Both |
 | **Plot** | One unit in a single-floor "Plots" building; its unit type records what stands on it (House / Villa / Bungalow / Building / Tower) |
 | **Logo** | The society's image, stored as a 512×512 square under a public key; shown in the super-admin panel, the society console and both mobile apps |
 | **Provisioning** | Creating and seeding the society's dedicated database |

@@ -20,9 +20,10 @@ import {
   useToast,
 } from '../components/ui.tsx';
 import { day, label, number } from '../lib/format.ts';
+import { LayoutChoice, layoutChoiceHint } from '../components/LayoutChoice.tsx';
 import { SocietyLogo } from '../components/SocietyLogo.tsx';
 import { useSession } from '../lib/session.tsx';
-import { ADMIN_ROLES, PLAN_CODES, SOCIETY_LAYOUTS, SOCIETY_LAYOUT_LABELS, SOCIETY_STATUSES, type Society, type SocietyLayout } from '../lib/types.ts';
+import { ADMIN_ROLES, PLAN_CODES, SOCIETY_LAYOUT_LABELS, SOCIETY_STATUSES, type Society, type SocietyLayout } from '../lib/types.ts';
 
 const SORTS = [
   { value: 'createdAt', label: 'Newest first' },
@@ -522,19 +523,11 @@ function CreateSocietyForm({
               ))}
             </Select>
           </Field>
-          <Field
-            label="Society layout"
-            hint="How the units are physically organised. A plot society is formed with one street gate, so the multi-gate module is not seeded — modules stay editable afterwards."
-          >
-            <Select value={form.layout} onChange={(e) => set('layout', e.target.value)}>
-              {SOCIETY_LAYOUTS.map((l) => (
-                <option key={l} value={l}>
-                  {SOCIETY_LAYOUT_LABELS[l]}
-                </option>
-              ))}
-            </Select>
-          </Field>
         </div>
+
+        <Field label="Society layout" hint={layoutChoiceHint(form.layout)}>
+          <LayoutChoice value={form.layout} onChange={(layout) => set('layout', layout)} />
+        </Field>
 
         <div className="grid grid--3">
           <Field label="Contact email">

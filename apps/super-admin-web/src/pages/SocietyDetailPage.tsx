@@ -1,4 +1,5 @@
 import { useMemo, useState, type FormEvent } from 'react';
+import type { StructureSetupPayload } from '@colonize/shared';
 import { Link, useParams } from 'react-router-dom';
 import { api } from '../lib/api.ts';
 import { useList, useResource } from '../lib/useResource.ts';
@@ -21,7 +22,9 @@ import {
   useToast,
   type Column,
 } from '../components/ui.tsx';
+import { LayoutChoice, layoutChoiceHint } from '../components/LayoutChoice.tsx';
 import { SocietyLogo } from '../components/SocietyLogo.tsx';
+import { StructureSetupForm } from '../components/StructureSetupForm.tsx';
 import { dateTime, day, label, money, number } from '../lib/format.ts';
 import { useSession } from '../lib/session.tsx';
 import {
@@ -29,7 +32,6 @@ import {
   MODULE_KEYS,
   PLAN_CODES,
   RENEWAL_MODES,
-  SOCIETY_LAYOUTS,
   SOCIETY_LAYOUT_LABELS,
   SOCIETY_TYPES,
   SOCIETY_TYPE_LABELS,
@@ -586,19 +588,14 @@ function ProfileTab({ id, record, editable, onSaved }: { id: string; record: Soc
           </Field>
         </div>
 
-        <fieldset disabled={!editable || !form} className="grid grid--2" style={{ border: 0, padding: 0, margin: 0 }}>
+        <fieldset disabled={!editable || !form} style={{ border: 0, padding: 0, margin: 0 }}>
           <Field
             label="Society layout"
-            hint="How the society is physically formed. Changing it to plot/row-house disables the multi-gate module (it cannot be re-added automatically — use the Plan tab)."
+            hint={`${layoutChoiceHint(extraValues.layout)} Changing to Layout (plots / houses) turns off multi-gate. Turn it back on from the Plan tab if that was a correction.`}
           >
-            <Select value={extraValues.layout} onChange={(e) => setExtraField('layout', e.target.value)}>
-              {SOCIETY_LAYOUTS.map((l) => (
-                <option key={l} value={l}>
-                  {SOCIETY_LAYOUT_LABELS[l]}
-                </option>
-              ))}
-            </Select>
+            <LayoutChoice value={extraValues.layout} onChange={(layout) => setExtraField('layout', layout)} />
           </Field>
+          <div className="grid grid--2">
           <Field label="Organizational type" hint="The legal form of the society">
             <Select value={extraValues.type} onChange={(e) => setExtraField('type', e.target.value)}>
               {SOCIETY_TYPES.map((t) => (
@@ -608,6 +605,7 @@ function ProfileTab({ id, record, editable, onSaved }: { id: string; record: Soc
               ))}
             </Select>
           </Field>
+          </div>
         </fieldset>
       </Card>
     </form>
@@ -627,39 +625,37 @@ function OnboardingTab({ id, record, editable }: { id: string; record: SocietyDe
   const checklist = state?.checklist ?? [];
   const done = checklist.filter((c) => c.done).length;
   const blockers = checklist.filter((c) => !c.done && c.required);
-  const [plotCount, setPlotCount] = useState('');
-  // A plot/row-house society has no towers — its structure is "N plots", which the operator
-  // types as a single number instead of a building declaration. Each plot unit gets a structure
-  // type (house, villa, bungalow, …); per-plot differences are made by editing individual units.
-  const [plotType, setPlotType] = useState('HOUSE');
-  const isPlotLayout = record.layout === 'PLOT' || record.layout === 'MIXED';
-
-  async function advance(event: FormEvent) {
-    event.preventDefault();
+  async function saveStep(payload: Record<string, unknown>) {
     setBusy(true);
     try {
-      const payload: Record<string, unknown> =
-        step === 'STRUCTURE' && Number(plotCount) > 0
-          ? { buildings: [{ name: 'Plots', code: 'PLOTS', totalFloors: 1, unitsPerFloor: Number(plotCount), unitPrefix: 'PH', unitType: plotType }] }
-          : {};
-      const result = await api.post<Record<string, unknown>>(`/platform/societies/${id}/onboarding`, {
+      const result = await api.post<{ summary?: string; unitsCreated?: number }>(`/platform/societies/${id}/onboarding`, {
         step,
         payload,
         dryRun,
       });
       toast.success(
         dryRun
-          ? `Dry run: ${JSON.stringify(result).slice(0, 160)}`
-          : step === 'STRUCTURE' && Number(result.unitsCreated ?? 0) > 0
-            ? `Onboarding step ${label(step)} recorded — ${number(Number(result.unitsCreated))} units created`
+          ? `Dry run: ${result.summary ?? `${number(Number(result.unitsCreated ?? 0))} units`}`
+          : result.summary
+            ? result.summary
             : `Onboarding step ${label(step)} recorded`,
       );
       if (!dryRun) onboarding.reload();
     } catch (err) {
       toast.error(err);
+      throw err;
     } finally {
       setBusy(false);
     }
+  }
+
+  function advance(event: FormEvent) {
+    event.preventDefault();
+    void saveStep({});
+  }
+
+  function recordStructure(payload: StructureSetupPayload) {
+    return saveStep({ setup: payload });
   }
 
   return (
@@ -718,48 +714,43 @@ function OnboardingTab({ id, record, editable }: { id: string; record: SocietyDe
           </Card>
 
           {editable ? (
-            <Card title="Record an onboarding step" subtitle="Use the dry run to see what a step would save before writing it">
-              <form onSubmit={advance} className="row row--wrap" style={{ gap: 10, alignItems: 'flex-end' }}>
-                <Field label="Step">
-                  <Select value={step} onChange={(e) => setStep(e.target.value)}>
-                    {['PROFILE', 'STRUCTURE', 'ADMIN', 'SETTINGS', 'ACTIVATION'].map((s) => (
-                      <option key={s} value={s}>
-                        {label(s)}
-                      </option>
-                    ))}
-                  </Select>
-                </Field>
-                {step === 'STRUCTURE' && isPlotLayout ? (
-                  <>
-                    <Field
-                      label="Plots"
-                      hint={
-                        record.layout === 'PLOT'
-                          ? 'Creates a single "Plots" building: one unit per plot, numbered PH1, PH2, …'
-                          : 'Creates a "Plots" building alongside any towers (units PH1, PH2, …)'
-                      }
-                    >
-                      <Input type="number" min={1} max={10000} value={plotCount} onChange={(e) => setPlotCount(e.target.value)} placeholder="e.g. 42" style={{ width: 120 }} />
-                    </Field>
-                    <Field label="Each plot is a" hint="Applied to every plot unit; edit individual units to vary them">
-                      <Select value={plotType} onChange={(e) => setPlotType(e.target.value)} style={{ width: 170 }}>
-                        {(['HOUSE', 'VILLA', 'BUNGALOW', 'BUILDING', 'TOWER'] as const).map((t) => (
-                          <option key={t} value={t}>
-                            {label(t)}
-                          </option>
-                        ))}
-                      </Select>
-                    </Field>
-                  </>
-                ) : null}
-                <label className="row" style={{ gap: 6, paddingBottom: 8 }}>
-                  <input type="checkbox" checked={dryRun} onChange={(e) => setDryRun(e.target.checked)} />
-                  <span className="small">Dry run</span>
-                </label>
-                <Button type="submit" variant="primary" busy={busy}>
-                  {dryRun ? 'Preview' : 'Record step'}
-                </Button>
-              </form>
+            <Card
+              title="Record an onboarding step"
+              subtitle={step === 'STRUCTURE' ? 'The same questions the society admin sees — only what this layout needs' : 'Use the dry run to see what a step would save before writing it'}
+            >
+              <Field label="Step">
+                <Select value={step} onChange={(e) => setStep(e.target.value)}>
+                  {['PROFILE', 'STRUCTURE', 'ADMIN', 'SETTINGS', 'ACTIVATION'].map((s) => (
+                    <option key={s} value={s}>
+                      {label(s)}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              {step === 'STRUCTURE' ? (
+                <div className="mt">
+                  <StructureSetupForm
+                    layout={record.layout}
+                    busy={busy}
+                    error={null}
+                    dryRun={dryRun}
+                    onDryRunChange={setDryRun}
+                    resetOnSuccess={!dryRun}
+                    submitLabel={dryRun ? 'Preview' : 'Create units and record step'}
+                    onSubmit={recordStructure}
+                  />
+                </div>
+              ) : (
+                <form onSubmit={advance} className="row row--wrap mt" style={{ gap: 10, alignItems: 'center' }}>
+                  <label className="row" style={{ gap: 6 }}>
+                    <input type="checkbox" checked={dryRun} onChange={(e) => setDryRun(e.target.checked)} />
+                    <span className="small">Dry run</span>
+                  </label>
+                  <Button type="submit" variant="primary" busy={busy}>
+                    {dryRun ? 'Preview' : 'Record step'}
+                  </Button>
+                </form>
+              )}
             </Card>
           ) : null}
         </>
