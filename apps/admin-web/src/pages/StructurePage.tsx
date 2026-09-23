@@ -203,14 +203,22 @@ export function StructurePage() {
       {can('unit:create') || can('building:create') ? (
         <Card
           title={buildings.length === 0 ? 'Add units' : 'Add more units'}
-          subtitle="A few questions, then the towers, plots and apartments are created for you"
+          subtitle={
+            layout === 'PLOT'
+              ? 'How many plots, then vacant plot, house, or tower on each'
+              : layout === 'MIXED'
+                ? 'Towers and their apartments, then plots. Use 0 to skip a side'
+                : layout === 'BUILDING'
+                  ? 'How many towers, and how many apartments each tower has'
+                  : 'Layout was not set at onboarding, so the tower questions are shown'
+          }
         >
           {society.loading && !layout ? (
             <Loading label="Checking how this society is laid out…" />
           ) : (
             <>
               {society.error ? <ErrorAlert error={society.error} /> : null}
-              <StructureSetupForm layout={layout} busy={setupBusy} error={setupError} onSubmit={addUnits} />
+              <StructureSetupForm key={layout ?? 'unset'} layout={layout} busy={setupBusy} error={setupError} onSubmit={addUnits} />
             </>
           )}
         </Card>

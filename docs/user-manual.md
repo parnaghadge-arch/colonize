@@ -282,14 +282,16 @@ The physical hierarchy every unit hangs off: **building → (wing) → floor →
 unit**. Adding units does not start there. The page asks only what the
 society's layout needs:
 
-- **Building (Tower / apartments)** — how many towers, and how many apartments
-  in each. Tick "different names or counts" only when the towers are not the
-  same. Apartments are numbered 101, 102… (4 per floor, changeable).
-- **Layout (Plot / houses)** — how many plots, then what is on each: **vacant
-  plot**, **house**, or **tower**. A tower asks how many apartments. If every
-  plot is the same, one choice covers all of them; "some plots are different"
-  opens a row per plot (or, above 40 plots, a short list of the exceptions).
-- **Both** — the two sections above. Leave a count at zero to skip that side.
+- **Building (Tower / apartments)** — how many towers, then a row for each
+  tower with how many apartments. **Same number in every tower** fills the
+  rows in one click. Apartment numbers (101, 102…) are filled in. How many
+  per floor is optional and stays closed unless you open it.
+- **Layout (Plot / houses)** — how many plots, then a row for each plot:
+  **vacant plot**, **house**, or **tower**. A tower asks how many apartments.
+  **Set every plot to** covers the case where they are all the same. Above
+  40 plots the form asks what most plots are, and the plot numbers that
+  differ, so nobody taps 200 rows.
+- **Both** — towers first, then plots. Leave a count at 0 to skip that side.
 
 A preview sentence ("This will add 2 towers (16 apartments) and 8 houses.")
 sits above the button, so nothing is saved blind. Names or plot numbers that
@@ -420,13 +422,15 @@ The form collects:
   later shows (super-admin list & detail, the society console sidebar, the
   mobile apps), so an off-shape upload can never distort anything.
 - **Opening plan** (FREE/BASIC/STANDARD/PREMIUM/ENTERPRISE).
-- **Society layout** — three buttons, not a dropdown:
+- **How is this society formed?** — three buttons, near the top of the form
+  (not a dropdown, so none of the choices is hidden). Each button says what
+  adding units will ask later:
   - **Building (Tower / apartments)** — the full module set for the plan.
-    Adding units later asks how many towers and how many apartments in each.
+    Adding units asks how many towers and how many apartments in each.
   - **Layout (Plot / houses)** — formed **without the multi-gate module** (one
     street gate); everything else as per plan. Adding units asks how many
-    plots, and whether each is a vacant plot, a house, or a tower.
-  - **Both** — full set. Adding units asks both questions.
+    plots, then whether each is a vacant plot, a house, or a tower.
+  - **Both** — full set. Adding units asks both. A count of 0 skips that side.
 - **First administrator** (optional but strongly recommended): name, email,
   phone, and a **password set now** (a blank password creates an account
   nobody can sign in to — the form warns about this).
@@ -450,9 +454,10 @@ retry after a failure.
 
 1. **Database provisioned**
 2. **Structure declared** — at least **one unit** exists. The onboarding
-   **Structure** step is the same short form the society admin sees, limited
-   to the layout chosen above (towers, plots, or both). A dry run previews
-   the sentence ("Would add 2 towers…") without writing.
+   **Structure** step shows the three layout buttons again (so a wrong choice
+   can be corrected before any units exist) and then the same short form the
+   society admin sees — only the questions that layout needs. A dry run
+   previews the sentence ("Would add 2 towers…") without writing.
 3. **Administrator exists** — at least one user with an admin role
 4. **Activation** — flips the society to ACTIVE, flips its PENDING
    administrators to ACTIVE, re-syncs the login directory, and completes

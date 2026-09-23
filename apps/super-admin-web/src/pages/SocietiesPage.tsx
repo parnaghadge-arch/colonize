@@ -454,6 +454,10 @@ function CreateSocietyForm({
           </Field>
         </div>
 
+        <Field label="How is this society formed?" required hint={layoutChoiceHint(form.layout)}>
+          <LayoutChoice value={form.layout} onChange={(layout) => set('layout', layout)} />
+        </Field>
+
         <Field label="Logo" hint="Optional — any shape (PNG, JPEG or WebP, up to 5 MB); it is saved as a 512×512 square">
           <div className="row" style={{ gap: 10, alignItems: 'center' }}>
             {logoPreview ? (
@@ -524,10 +528,6 @@ function CreateSocietyForm({
             </Select>
           </Field>
         </div>
-
-        <Field label="Society layout" hint={layoutChoiceHint(form.layout)}>
-          <LayoutChoice value={form.layout} onChange={(layout) => set('layout', layout)} />
-        </Field>
 
         <div className="grid grid--3">
           <Field label="Contact email">

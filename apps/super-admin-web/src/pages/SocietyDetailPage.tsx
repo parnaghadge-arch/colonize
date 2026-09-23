@@ -215,7 +215,7 @@ export function SocietyDetailPage() {
 
       {tab === 'overview' ? <OverviewTab id={id} record={record} /> : null}
       {tab === 'profile' ? <ProfileTab id={id} record={record} editable={canUpdate} onSaved={() => { society.reload(); onboarding.reload(); }} /> : null}
-      {tab === 'onboarding' ? <OnboardingTab id={id} record={record} editable={canUpdate} /> : null}
+      {tab === 'onboarding' ? <OnboardingTab id={id} record={record} editable={canUpdate} onLayoutSaved={() => society.reload()} /> : null}
       {tab === 'plan' ? <PlanTab id={id} record={record} editable={canSubscription} /> : null}
       {tab === 'admins' ? <AdminsTab id={id} canInvite={canManage || can('user:create')} canManage={canManage} /> : null}
       {tab === 'audit' ? <AuditTab id={id} /> : null}
@@ -614,12 +614,23 @@ function ProfileTab({ id, record, editable, onSaved }: { id: string; record: Soc
 
 /* -------------------------------- onboarding -------------------------------- */
 
-function OnboardingTab({ id, record, editable }: { id: string; record: SocietyDetail; editable: boolean }) {
+function OnboardingTab({
+  id,
+  record,
+  editable,
+  onLayoutSaved,
+}: {
+  id: string;
+  record: SocietyDetail;
+  editable: boolean;
+  onLayoutSaved: () => void;
+}) {
   const toast = useToast();
   const onboarding = useResource<OnboardingState>(`/platform/societies/${id}/onboarding`);
   const [step, setStep] = useState('PROFILE');
   const [dryRun, setDryRun] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [layoutBusy, setLayoutBusy] = useState(false);
 
   const state = onboarding.data;
   const checklist = state?.checklist ?? [];
@@ -656,6 +667,24 @@ function OnboardingTab({ id, record, editable }: { id: string; record: SocietyDe
 
   function recordStructure(payload: StructureSetupPayload) {
     return saveStep({ setup: payload });
+  }
+
+  async function changeLayout(next: SocietyLayout) {
+    if (next === record.layout || layoutBusy) return;
+    setLayoutBusy(true);
+    try {
+      const result = await api.patch<{ layoutModulesRemoved?: string[] }>(`/platform/societies/${id}`, { layout: next });
+      toast.success(
+        result?.layoutModulesRemoved?.length
+          ? `Layout updated — ${result.layoutModulesRemoved.join(', ')} turned off. The questions below now match.`
+          : 'Layout updated. The questions below now match.',
+      );
+      onLayoutSaved();
+    } catch (err) {
+      toast.error(err);
+    } finally {
+      setLayoutBusy(false);
+    }
   }
 
   return (
@@ -728,8 +757,19 @@ function OnboardingTab({ id, record, editable }: { id: string; record: SocietyDe
                 </Select>
               </Field>
               {step === 'STRUCTURE' ? (
-                <div className="mt">
+                <div className="mt stack" style={{ gap: 14 }}>
+                  <Field
+                    label="How is this society formed?"
+                    hint="Same choice as on the create form. Changing it only changes the questions below — it does not delete units already created."
+                  >
+                    <LayoutChoice
+                      value={record.layout ?? 'BUILDING'}
+                      onChange={(next) => void changeLayout(next)}
+                      disabled={layoutBusy || busy}
+                    />
+                  </Field>
                   <StructureSetupForm
+                    key={record.layout ?? 'unset'}
                     layout={record.layout}
                     busy={busy}
                     error={null}
