@@ -2,7 +2,7 @@
   "name": "colonize",
   "version": "1.0.0",
   "private": true,
-  "description": "Colonize — multi-tenant Community & Residential Society Management SaaS platform (MongoDB database-per-society, Node/Express API, React+Vite web apps, Expo SDK 54 mobile apps).",
+  "description": "Colonize — multi-tenant Community & Residential Society Management SaaS platform (MongoDB database-per-society, Node/Express API, React+Vite web apps, Expo SDK 57 mobile apps).",
   "license": "UNLICENSED",
   "engines": {
     "node": ">=20.11.0",
@@ -34,12 +34,14 @@
   },
   "devDependencies": {
     "concurrently": "^9.1.2",
-    "react": "~19.1.4",
-    "react-dom": "~19.1.4",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
     "typescript": "~5.9.2"
   },
   "overrides": {
-    "react": "~19.1.4",
-    "react-dom": "~19.1.4"
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-native": "0.86.3",
+    "@types/react": "~19.2.2"
   }
 }

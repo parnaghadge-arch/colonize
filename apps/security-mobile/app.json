@@ -5,16 +5,10 @@
     "version": "1.0.0",
     "orientation": "default",
     "userInterfaceStyle": "dark",
-    "newArchEnabled": true,
     "backgroundColor": "#0b0f14",
     "scheme": "colonize-security",
     "icon": "./assets/icon.png",
     "favicon": "./assets/favicon.png",
-    "splash": {
-      "image": "./assets/splash-icon.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#0b0f14"
-    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.colonize.security",
@@ -25,7 +19,6 @@
     },
     "android": {
       "package": "com.colonize.security",
-      "edgeToEdgeEnabled": true,
       "permissions": [
         "CAMERA"
       ],
@@ -40,7 +33,24 @@
     },
     "plugins": [
       "expo-secure-store",
-      "expo-dev-client"
+      "expo-dev-client",
+      "expo-status-bar",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Colonize Security scans QR gate passes to admit and release visitors at the gate.",
+          "barcodeScannerEnabled": true,
+          "recordAudioAndroid": false
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#0b0f14"
+        }
+      ]
     ]
   }
 }

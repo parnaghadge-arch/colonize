@@ -146,29 +146,23 @@ npm run export:web -w @colonize/security-mobile    # → apps/security-mobile/di
 **On a device / simulator** — after `npm run dev:resident`, press `a` (Android), `i` (iOS)
 or `n` (Expo Go) in the Expo terminal.
 
-**⚠️ "Project is incompatible with this version of Expo Go"** — if your phone's Expo Go is
-a different SDK than this project (SDK 54), Expo Go refuses to load the bundle. The App Store
-only ever carries the *latest* Expo Go (currently SDK 57), so on a physical iOS device an
-SDK-54 project can never open in Expo Go. Three ways to run this app on a device:
+**⚠️ "Project is incompatible with this version of Expo Go"** — Expo Go only loads a project
+built for the same SDK. Both apps are Expo SDK 57, which is what the current App Store / Play
+Store Expo Go expects. Update Expo Go from the store, then scan the QR from `npm run dev:resident`
+or `npm run dev:security` again. A custom dev build is still available if you do not want Expo Go:
 
-1. **Dev build — recommended, works on any device, ignores Expo Go entirely.** Both apps
-   ship `expo-dev-client`, so a normal build *is* a native app (with a dev menu) that pairs
-   with `expo start` like Expo Go does:
-   ```bash
-   # locally (needs Android Studio / Xcode):
-   npm run android -w @colonize/security-mobile    # builds & installs a dev build
-   npm run ios -w @colonize/resident-mobile        # iOS: macOS only
-   # or in the cloud (needs a free EAS account — `npx eas login` first):
-   cd apps/security-mobile && npx eas build --profile development --platform android   # → APK
-   cd apps/resident-mobile && npx eas build --profile development --platform android   # → APK
-   ```
-   Then install the APK/IPA on the device, run `npm run dev -w <app>` on your machine, and
-   open the app — it connects to the dev server exactly like Expo Go would.
-2. **Android only: install the Expo Go build that matches SDK 54.** Older Expo Go versions
-   can be sideloaded on Android: <https://expo.dev/go?sdkVersion=54&platform=android>, then
-   scan the `expo start` QR as usual.
-3. **iOS simulator:** install Expo Go for SDK 54 into the simulator
-   (<https://expo.dev/go?sdkVersion=54&platform=ios&device=false>) and press `i`.
+```bash
+# locally (needs Android Studio / Xcode):
+npm run android -w @colonize/security-mobile    # builds & installs a dev build
+npm run ios -w @colonize/resident-mobile        # iOS: macOS only
+# or in the cloud (needs a free EAS account — `npx eas login` first):
+cd apps/security-mobile && npx eas build --profile development --platform android   # → APK
+cd apps/resident-mobile && npx eas build --profile development --platform android   # → APK
+```
+
+Then install the APK/IPA on the device, run `npm run dev -w <app>` on your machine, and
+open the app — it connects to the dev server exactly like Expo Go would. EAS builds use
+Node 22.14 (SDK 57 needs Node 22.13 or newer).
 
 **API base URL** — each app resolves its backend in this order:
 
@@ -211,8 +205,8 @@ npm run typecheck                                    # tsc --noEmit across all w
 
 ## Building the mobile apps for Android and iOS
 
-Both mobile apps (`apps/resident-mobile`, `apps/security-mobile`) are Expo SDK 54 /
-React Native 0.81.6 (new architecture) and are production-ready for both stores.
+Both mobile apps (`apps/resident-mobile`, `apps/security-mobile`) are Expo SDK 57 /
+React Native 0.86.3 (new architecture) and are production-ready for both stores.
 They share one backend; the production API URL is injected at build time via
 `EXPO_PUBLIC_API_URL` (see [eas.json](#build-profiles)).
 

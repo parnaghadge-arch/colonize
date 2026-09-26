@@ -5,16 +5,10 @@
     "version": "1.0.0",
     "orientation": "default",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
     "backgroundColor": "#f5f6f8",
     "scheme": "colonize-resident",
     "icon": "./assets/icon.png",
     "favicon": "./assets/favicon.png",
-    "splash": {
-      "image": "./assets/splash-icon.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#f5f6f8"
-    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.colonize.resident",
@@ -24,7 +18,6 @@
     },
     "android": {
       "package": "com.colonize.resident",
-      "edgeToEdgeEnabled": true,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#1f6feb"
@@ -36,7 +29,16 @@
     },
     "plugins": [
       "expo-secure-store",
-      "expo-dev-client"
+      "expo-dev-client",
+      "expo-status-bar",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#f5f6f8"
+        }
+      ]
     ]
   }
 }
