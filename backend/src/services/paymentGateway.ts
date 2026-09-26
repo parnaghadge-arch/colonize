@@ -21,12 +21,19 @@ import type { Document } from '../db/drivers/types.js';
 
 export type GatewayProvider = 'razorpay' | 'mock' | 'none';
 
+export interface GatewayCredentials {
+  keyId?: string | null;
+  keySecret?: string | null;
+}
+
 export interface CreateOrderInput {
   amount: number;
   currency: string;
   receipt: string;
   notes?: Record<string, string>;
   provider?: GatewayProvider;
+  /** Per-society keys. When omitted, the server env keys are used. */
+  credentials?: GatewayCredentials;
 }
 
 export interface CreatedOrder {
@@ -35,6 +42,8 @@ export interface CreatedOrder {
   amount: number;
   currency: string;
   keyId: string | null;
+  /** Hosted checkout URL (Razorpay payment link) so a phone can pay without a native SDK. */
+  checkoutUrl?: string;
   /** Present for the mock provider so a dev client can complete the flow end to end. */
   mockPaymentId?: string;
   mockSignature?: string;
@@ -45,6 +54,8 @@ export interface VerifyInput {
   orderId: string;
   paymentId: string;
   signature: string;
+  /** Society Razorpay secret, when it overrides the server env. */
+  keySecret?: string | null;
 }
 
 export interface RefundInput {
@@ -52,6 +63,7 @@ export interface RefundInput {
   paymentId: string;
   amount: number;
   reason?: string;
+  credentials?: GatewayCredentials;
 }
 
 /* -------------------------------- provider --------------------------------- */
@@ -75,14 +87,15 @@ export async function createOrder(input: CreateOrderInput): Promise<CreatedOrder
   if (!Number.isFinite(amountInPaise) || amountInPaise <= 0) throw ApiError.badRequest('The payment amount must be greater than zero');
 
   if (provider === 'razorpay') {
+    const keys = razorpayKeys(input.credentials);
     const order = await razorpayRequest<{ id: string; amount: number; currency: string }>('POST', '/orders', {
       amount: amountInPaise,
       currency: input.currency ?? 'INR',
       receipt: input.receipt,
       payment_capture: 1,
       notes: input.notes ?? {},
-    });
-    return { provider, orderId: order.id, amount: order.amount / 100, currency: order.currency, keyId: env.RAZORPAY_KEY_ID ?? null };
+    }, input.credentials);
+    return { provider, orderId: order.id, amount: order.amount / 100, currency: order.currency, keyId: keys.keyId };
   }
 
   // Mock provider: a real order id and a signature the client must echo back, so the
@@ -120,8 +133,9 @@ export function verifyPayment(input: VerifyInput): { verified: boolean; reason?:
   if (!orderId || !paymentId || !signature) return { verified: false, reason: 'Missing verification parameters' };
 
   if (provider === 'razorpay') {
-    if (!env.RAZORPAY_KEY_SECRET) return { verified: false, reason: 'Gateway secret is not configured' };
-    const expected = crypto.createHmac('sha256', env.RAZORPAY_KEY_SECRET).update(`${orderId}|${paymentId}`).digest('hex');
+    const secret = input.keySecret || env.RAZORPAY_KEY_SECRET;
+    if (!secret) return { verified: false, reason: 'Gateway secret is not configured' };
+    const expected = crypto.createHmac('sha256', secret).update(`${orderId}|${paymentId}`).digest('hex');
     const a = Buffer.from(expected);
     const b = Buffer.from(String(signature));
     if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return { verified: false, reason: 'Signature mismatch' };
@@ -136,16 +150,47 @@ export function verifyPayment(input: VerifyInput): { verified: boolean; reason?:
 }
 
 /** Re-ask the provider whether a payment really settled (webhook-independent confirmation). */
-export async function fetchPayment(provider: GatewayProvider, paymentId: string): Promise<Document | null> {
+export async function fetchPayment(provider: GatewayProvider, paymentId: string, credentials?: GatewayCredentials): Promise<Document | null> {
   if (provider !== 'razorpay') {
     return paymentId.startsWith('pay_mock_') ? { id: paymentId, status: 'captured', entity: 'payment', method: 'upi' } : null;
   }
   try {
-    return await razorpayRequest<Document>('GET', `/payments/${paymentId}`);
+    return await razorpayRequest<Document>('GET', `/payments/${paymentId}`, undefined, credentials);
   } catch (err) {
     logger.warn({ err: (err as Error).message, paymentId }, 'payment: provider fetch failed');
     return null;
   }
+}
+
+/**
+ * A hosted Razorpay payment link. The resident opens `shortUrl` in the browser; the server
+ * later asks Razorpay whether it was paid, so the phone never has to embed a checkout SDK.
+ */
+export async function createPaymentLink(input: {
+  amount: number;
+  currency: string;
+  description: string;
+  referenceId: string;
+  credentials?: GatewayCredentials;
+}): Promise<{ id: string; shortUrl: string; amount: number }> {
+  const link = await razorpayRequest<{ id: string; short_url: string; amount: number }>(
+    'POST',
+    '/payment_links',
+    {
+      amount: Math.round(Number(input.amount) * 100),
+      currency: input.currency || 'INR',
+      description: input.description.slice(0, 200),
+      reference_id: input.referenceId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40) || `ref${Date.now()}`,
+      notify: { sms: false, email: false },
+      reminder_enable: false,
+    },
+    input.credentials,
+  );
+  return { id: link.id, shortUrl: link.short_url, amount: Number(link.amount) / 100 };
+}
+
+export async function fetchPaymentLink(id: string, credentials?: GatewayCredentials): Promise<Document> {
+  return razorpayRequest<Document>('GET', `/payment_links/${encodeURIComponent(id)}`, undefined, credentials);
 }
 
 /* --------------------------------- refunds --------------------------------- */
@@ -158,7 +203,7 @@ export async function refund(input: RefundInput): Promise<{ provider: GatewayPro
     const result = await razorpayRequest<{ id: string; amount: number; status: string }>('POST', `/payments/${input.paymentId}/refund`, {
       amount: Math.round(input.amount * 100),
       notes: input.reason ? { reason: input.reason } : {},
-    });
+    }, input.credentials);
     return { provider, refundId: result.id, amount: result.amount / 100, status: result.status };
   }
 
@@ -189,15 +234,22 @@ export function verifyWebhookSignature(rawBody: string | Buffer, signature: stri
 
 /* -------------------------------- HTTP layer -------------------------------- */
 
-async function razorpayRequest<T>(method: 'GET' | 'POST', path: string, body?: Document): Promise<T> {
-  if (!env.RAZORPAY_KEY_ID || !env.RAZORPAY_KEY_SECRET) {
-    throw new ApiError('The payment gateway is not configured on this server', 'PAYMENT_FAILED');
+function razorpayKeys(credentials?: GatewayCredentials): { keyId: string; keySecret: string } {
+  const keyId = String(credentials?.keyId || env.RAZORPAY_KEY_ID || '');
+  const keySecret = String(credentials?.keySecret || env.RAZORPAY_KEY_SECRET || '');
+  if (!keyId || !keySecret) {
+    throw new ApiError('The payment gateway is not configured. Add Razorpay keys under Payments, or use the mock gateway.', 'PAYMENT_FAILED');
   }
-  const credentials = Buffer.from(`${env.RAZORPAY_KEY_ID}:${env.RAZORPAY_KEY_SECRET}`).toString('base64');
+  return { keyId, keySecret };
+}
+
+async function razorpayRequest<T>(method: 'GET' | 'POST', path: string, body?: Document, credentials?: GatewayCredentials): Promise<T> {
+  const keys = razorpayKeys(credentials);
+  const token = Buffer.from(`${keys.keyId}:${keys.keySecret}`).toString('base64');
   const response = await fetch(`${env.RAZORPAY_BASE_URL}${path}`, {
     method,
     headers: {
-      Authorization: `Basic ${credentials}`,
+      Authorization: `Basic ${token}`,
       ...(body ? { 'Content-Type': 'application/json' } : {}),
     },
     ...(body ? { body: JSON.stringify(body) } : {}),

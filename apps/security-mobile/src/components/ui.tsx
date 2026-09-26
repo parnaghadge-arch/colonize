@@ -3,7 +3,7 @@
  * (daylight, gloves, quick glances). Same primitive set as the resident app.
  */
 
-import React, { type ReactNode } from 'react';
+import React, { useContext, type ReactNode } from 'react';
 import {
   ActivityIndicator,
   Image,
@@ -14,8 +14,9 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { resolveAssetUrl } from '../lib/api.ts';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { ChromeContext } from '../lib/chromeContext.ts';
 
 export const colors = {
   bg: '#0b0f14',
@@ -40,10 +41,28 @@ export const colors = {
 };
 
 export function Screen({ children, scroll = true, style }: { children: ReactNode; scroll?: boolean; style?: object }) {
+  const chromed = useContext(ChromeContext);
+  const insets = useSafeAreaInsets();
+  const frame = {
+    paddingTop: chromed ? 12 : insets.top + 12,
+    paddingBottom: chromed ? 20 : insets.bottom + 20,
+    paddingLeft: chromed ? 16 : insets.left + 16,
+    paddingRight: chromed ? 16 : insets.right + 16,
+    width: '100%' as const,
+    maxWidth: 840,
+    alignSelf: 'center' as const,
+    flexGrow: 1,
+  };
   return (
-    <SafeAreaView style={[styles.safe, style]} edges={['top', 'left', 'right']}>
-      {scroll ? <ScrollView contentContainerStyle={styles.scrollContent}>{children}</ScrollView> : <View style={styles.scrollContent}>{children}</View>}
-    </SafeAreaView>
+    <View style={[styles.safe, style]}>
+      {scroll ? (
+        <ScrollView contentContainerStyle={frame} keyboardShouldPersistTaps="handled">
+          {children}
+        </ScrollView>
+      ) : (
+        <View style={[frame, { flex: 1 }]}>{children}</View>
+      )}
+    </View>
   );
 }
 

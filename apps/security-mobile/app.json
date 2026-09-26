@@ -3,7 +3,7 @@
     "name": "Colonize Security",
     "slug": "colonize-security",
     "version": "1.0.0",
-    "orientation": "portrait",
+    "orientation": "default",
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "backgroundColor": "#0b0f14",

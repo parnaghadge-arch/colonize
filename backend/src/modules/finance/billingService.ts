@@ -45,6 +45,8 @@ export interface MaintenanceSettings {
   billableMemberKind: string;
   includeSinkingFund: boolean;
   sinkingFundPerUnit: number;
+  /** MONTHLY | QUARTERLY | HALF_YEARLY | YEARLY. The period string is what generation actually bills. */
+  cycle?: string;
 }
 
 export const DEFAULT_MAINTENANCE_SETTINGS: Partial<MaintenanceSettings> = {
@@ -54,19 +56,96 @@ export const DEFAULT_MAINTENANCE_SETTINGS: Partial<MaintenanceSettings> = {
   graceDays: 5,
   lateFeeType: 'FIXED',
   lateFeeValue: 100,
+  cycle: 'MONTHLY',
 };
 
 export async function billingSettings(ctx: BillingContext): Promise<MaintenanceSettings> {
   return getSettings<MaintenanceSettings>({ db: ctx.db, societyId: ctx.societyId }, 'maintenance');
 }
 
-/** `2026-09` → the first and last instant of that month. */
+const BILLING_PERIOD_RE = /^(\d{4}-(0[1-9]|1[0-2])|\d{4}-Q[1-4]|\d{4}-H[12]|\d{4})$/;
+
+export type ParsedBillingPeriod = {
+  cycle: 'MONTHLY' | 'QUARTERLY' | 'HALF_YEARLY' | 'YEARLY';
+  start: Date;
+  end: Date;
+  /** How many months of recurring charges this period covers. Arrears are never multiplied by this. */
+  months: number;
+};
+
+/**
+ * `2026-09` is September. `2026-Q2` is Apr–Jun. `2026-H2` is Jul–Dec. `2026` is the calendar year.
+ * `YYYY-MM` stays valid so existing monthly bills and the acceptance suite are unchanged.
+ */
+export function parseBillingPeriod(period: string): ParsedBillingPeriod {
+  if (!BILLING_PERIOD_RE.test(period)) {
+    throw ApiError.badRequest('A period must look like 2026-09, 2026-Q1, 2026-H1 or 2026');
+  }
+  if (/^\d{4}-\d{2}$/.test(period)) {
+    const [year, month] = period.split('-').map(Number);
+    const start = new Date(Date.UTC(year, month - 1, 1));
+    const end = new Date(Date.UTC(year, month, 0, 23, 59, 59));
+    return { cycle: 'MONTHLY', start, end, months: 1 };
+  }
+  const year = Number(period.slice(0, 4));
+  if (period.includes('-Q')) {
+    const quarter = Number(period.slice(-1));
+    const startMonth = (quarter - 1) * 3;
+    return {
+      cycle: 'QUARTERLY',
+      start: new Date(Date.UTC(year, startMonth, 1)),
+      end: new Date(Date.UTC(year, startMonth + 3, 0, 23, 59, 59)),
+      months: 3,
+    };
+  }
+  if (period.includes('-H')) {
+    const startMonth = period.endsWith('2') ? 6 : 0;
+    return {
+      cycle: 'HALF_YEARLY',
+      start: new Date(Date.UTC(year, startMonth, 1)),
+      end: new Date(Date.UTC(year, startMonth + 6, 0, 23, 59, 59)),
+      months: 6,
+    };
+  }
+  return {
+    cycle: 'YEARLY',
+    start: new Date(Date.UTC(year, 0, 1)),
+    end: new Date(Date.UTC(year, 11, 31, 23, 59, 59)),
+    months: 12,
+  };
+}
+
+/** First and last instant of a billing period. */
 export function periodBounds(period: string): { start: Date; end: Date } {
-  if (!/^\d{4}-\d{2}$/.test(period)) throw ApiError.badRequest('A period must look like 2026-09');
-  const [year, month] = period.split('-').map(Number);
-  const start = new Date(Date.UTC(year, month - 1, 1));
-  const end = new Date(Date.UTC(year, month, 0, 23, 59, 59));
-  return { start, end };
+  const parsed = parseBillingPeriod(period);
+  return { start: parsed.start, end: parsed.end };
+}
+
+/** Multiply recurring charge lines by the cycle length. Arrears are left alone. */
+export function scaleRecurringLines<T extends { type: string; label: string; amount: number }>(lines: T[], months: number): T[] {
+  if (months <= 1) return lines;
+  return lines.map((line) => {
+    if (line.type === 'ARREARS') return line;
+    return {
+      ...line,
+      amount: round2(Number(line.amount) * months),
+      label: `${line.label} × ${months} months`,
+    };
+  });
+}
+
+/** Unpaid bills whose period ended before this one. String-sorting `2026-Q1` against `2026-09` is wrong, so dates win. */
+function earlierUnpaidFilter(societyId: string, unitId: unknown, period: string, start: Date): Document {
+  return {
+    societyId,
+    unitId,
+    dueAmount: { $gt: 0 },
+    status: { $in: ['GENERATED', 'SENT', 'PARTIALLY_PAID', 'OVERDUE'] },
+    $or: [
+      { periodEnd: { $lt: start } },
+      { periodEnd: { $exists: false }, period: { $lt: period } },
+    ],
+  };
 }
 
 export function currentPeriod(now = new Date()): string {
@@ -223,7 +302,8 @@ export interface GenerateBillsResult {
  */
 export async function generateBills(ctx: BillingContext, input: GenerateBillsInput): Promise<GenerateBillsResult> {
   const settings = await billingSettings(ctx);
-  const { start, end } = periodBounds(input.period);
+  const parsedPeriod = parseBillingPeriod(input.period);
+  const { start, end } = parsedPeriod;
   const mode = input.mode ?? 'BULK';
 
   const dueDay = Math.min(Math.max(Number(settings.dueDayOfMonth ?? 10), 1), 28);
@@ -265,13 +345,16 @@ export async function generateBills(ctx: BillingContext, input: GenerateBillsInp
         continue;
       }
 
-      const { lines, subtotal } = await computeBillLines(ctx, unit, settings, include);
+      const computed = await computeBillLines(ctx, unit, settings, include);
+      // Recurring heads (maintenance, water, parking) cover the whole cycle. Arrears are added after this and are not multiplied.
+      const lines = scaleRecurringLines(computed.lines, parsedPeriod.months);
+      const subtotal = round2(lines.reduce((sum, line) => sum + Number(line.amount), 0));
 
       // Carry forward anything still unpaid from earlier periods (§28 arrears).
       let arrears = 0;
       if (carryArrears) {
         const arrearsRows = await ctx.db.collection('maintenance_bills').find(
-          { societyId: ctx.societyId, unitId: unit._id, dueAmount: { $gt: 0 }, status: { $in: ['GENERATED', 'SENT', 'PARTIALLY_PAID', 'OVERDUE'] }, period: { $lt: input.period } },
+          earlierUnpaidFilter(ctx.societyId, unit._id, input.period, start),
           { limit: 200 },
         );
         arrears = round2(arrearsRows.reduce((sum, b) => sum + Number(b.dueAmount ?? 0), 0));
@@ -327,6 +410,8 @@ export async function generateBills(ctx: BillingContext, input: GenerateBillsInp
           period: input.period,
           periodStart: start,
           periodEnd: end,
+          cycle: parsedPeriod.cycle,
+          cycleMonths: parsedPeriod.months,
           generatedAt: new Date(),
           dueDate,
           status: 'GENERATED',
@@ -366,6 +451,8 @@ export async function generateBills(ctx: BillingContext, input: GenerateBillsInp
             includeSinkingFund: settings.includeSinkingFund,
             sinkingFundPerUnit: settings.sinkingFundPerUnit,
             dueDayOfMonth: settings.dueDayOfMonth,
+            cycle: parsedPeriod.cycle,
+            cycleMonths: parsedPeriod.months,
             area: Number(unit.carpetAreaSqft ?? 0),
             unitRateOverride: unit.maintenanceRate ?? null,
           },
@@ -493,7 +580,7 @@ export async function createBill(ctx: BillingContext, input: CreateBillInput): P
   const arrearsRows: Document[] = [];
   if (input.carryForwardArrears !== false) {
     const rows = await ctx.db.collection('maintenance_bills').find(
-      { societyId: ctx.societyId, unitId: unit._id, dueAmount: { $gt: 0 }, status: { $in: ['GENERATED', 'SENT', 'PARTIALLY_PAID', 'OVERDUE'] }, period: { $lt: input.period } },
+      earlierUnpaidFilter(ctx.societyId, unit._id, input.period, start),
       { limit: 200 },
     );
     arrearsRows.push(...rows);

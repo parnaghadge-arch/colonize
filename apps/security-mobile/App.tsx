@@ -9,6 +9,7 @@ import React from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { NavigationContainer, DefaultTheme } from '@react-navigation/native';
+import { navigationRef, SignedInChrome } from './src/components/chrome.tsx';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -38,7 +39,7 @@ function ConsoleTabs() {
     <Tab.Navigator
       screenOptions={{
         headerShown: false,
-        tabBarStyle: { backgroundColor: colors.bg, borderTopColor: colors.border },
+        tabBarStyle: { display: 'none', height: 0, backgroundColor: colors.bg, borderTopColor: colors.border },
         tabBarActiveTintColor: colors.brand,
         tabBarInactiveTintColor: colors.textFaint,
       }}
@@ -103,14 +104,13 @@ function Root() {
   }
 
   return (
-    <Stack.Navigator screenOptions={{ headerShown: false, animation: 'slide_from_right' }}>
-      {!gateId ? (
-        <Stack.Screen name="Shift" component={ShiftScreen} />
-      ) : (
-        <Stack.Screen name="Console" component={ConsoleTabs} options={{ headerShown: true, title: 'Gate console', headerStyle: { backgroundColor: colors.bg }, headerTintColor: colors.text }} />
-      )}
-      <Stack.Screen name="WalkIn" component={WalkInScreen} options={{ headerShown: true, title: 'Register walk-in guest', headerStyle: { backgroundColor: colors.bg }, headerTintColor: colors.text, headerShadowVisible: false }} />
+    <SignedInChrome>
+    <Stack.Navigator initialRouteName={gateId ? 'Console' : 'Shift'} screenOptions={{ headerShown: false, animation: 'slide_from_right' }}>
+      <Stack.Screen name="Console" component={ConsoleTabs} />
+      <Stack.Screen name="Shift" component={ShiftScreen} />
+      <Stack.Screen name="WalkIn" component={WalkInScreen} />
     </Stack.Navigator>
+    </SignedInChrome>
   );
 }
 
@@ -118,7 +118,7 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <SessionProvider>
-        <NavigationContainer theme={navTheme}>
+        <NavigationContainer ref={navigationRef} theme={navTheme}>
           <StatusBar style="light" />
           <Root />
         </NavigationContainer>

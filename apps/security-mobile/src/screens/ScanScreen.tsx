@@ -9,7 +9,7 @@
  */
 
 import React, { useCallback, useRef, useState } from 'react';
-import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 
 import { Alert, Button, Card, Field, Screen, ScreenTitle, Stat, colors } from '../components/ui.tsx';
@@ -32,6 +32,8 @@ interface LastScan {
 }
 
 export function ScanScreen(_props: Props) {
+  const { width, height } = useWindowDimensions();
+  const cameraHeight = Math.max(160, Math.min(320, Math.min(width - 32, height * 0.42)));
   const { gateId, who } = useSession();
   const [permission, requestPermission] = useCameraPermissions();
   const [action, setAction] = useState<ScanAction>('CHECK_IN');
@@ -113,7 +115,7 @@ export function ScanScreen(_props: Props) {
       </View>
 
       {cameraOn && Platform.OS !== 'web' ? (
-        <View style={styles.cameraBox}>
+        <View style={[styles.cameraBox, { height: cameraHeight }]}>
           {permission?.granted ? (
             <CameraView
               style={StyleSheet.absoluteFill}
@@ -179,7 +181,7 @@ const styles = StyleSheet.create({
   actionTabActive: { backgroundColor: colors.success, borderColor: colors.success },
   actionTabExitActive: { backgroundColor: colors.danger, borderColor: colors.danger },
   actionTabLabel: { fontSize: 15, fontWeight: '700', color: colors.textMuted },
-  cameraBox: { height: 300, borderRadius: 14, overflow: 'hidden', marginBottom: 4, backgroundColor: '#000' },
+  cameraBox: { width: '100%', borderRadius: 14, overflow: 'hidden', marginBottom: 4, backgroundColor: '#000' },
   cameraPlaceholder: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 20 },
   cameraText: { color: colors.textMuted, fontSize: 14, textAlign: 'center', lineHeight: 20 },
   reticle: {

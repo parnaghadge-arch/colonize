@@ -589,6 +589,30 @@ export type PlanTier = (typeof PLAN_TIERS)[number];
 export const BILLING_CYCLES = ['MONTHLY', 'QUARTERLY', 'YEARLY'] as const;
 export type BillingCycle = (typeof BILLING_CYCLES)[number];
 
+/**
+ * How often a society raises maintenance. Distinct from `BILLING_CYCLES`, which is the
+ * SaaS subscription interval and has no half-yearly option.
+ */
+export const MAINTENANCE_CYCLES = ['MONTHLY', 'QUARTERLY', 'HALF_YEARLY', 'YEARLY'] as const;
+export type MaintenanceCycle = (typeof MAINTENANCE_CYCLES)[number];
+
+export const MAINTENANCE_CYCLE_MONTHS: Record<MaintenanceCycle, number> = {
+  MONTHLY: 1,
+  QUARTERLY: 3,
+  HALF_YEARLY: 6,
+  YEARLY: 12,
+};
+
+export const MAINTENANCE_CYCLE_LABELS: Record<MaintenanceCycle, string> = {
+  MONTHLY: 'Monthly',
+  QUARTERLY: 'Quarterly',
+  HALF_YEARLY: 'Half-yearly',
+  YEARLY: 'Yearly',
+};
+
+/** `YYYY-MM`, `YYYY-Q1`…`Q4`, `YYYY-H1`/`H2`, or `YYYY`. */
+export const BILLING_PERIOD_PATTERN = /^(\d{4}-(0[1-9]|1[0-2])|\d{4}-Q[1-4]|\d{4}-H[12]|\d{4})$/;
+
 export const SUBSCRIPTION_STATUS = [
   'TRIAL',
   'ACTIVE',

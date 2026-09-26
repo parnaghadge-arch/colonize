@@ -9,6 +9,7 @@ import React from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { NavigationContainer, DefaultTheme } from '@react-navigation/native';
+import { navigationRef, SignedInChrome } from './src/components/chrome.tsx';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -55,6 +56,7 @@ function MainTabs() {
     <Tab.Navigator
       screenOptions={{
         headerShown: false,
+        tabBarStyle: { display: 'none', height: 0 },
         tabBarActiveTintColor: colors.brandDark,
         tabBarInactiveTintColor: colors.textFaint,
       }}
@@ -89,6 +91,7 @@ function Root() {
   }
 
   return (
+    <SignedInChrome>
     <Stack.Navigator screenOptions={{ headerShown: false, animation: 'slide_from_right' }}>
       <Stack.Screen name="Home" component={MainTabs} />
       <Stack.Screen name="ComplaintDetail" component={ComplaintDetailScreen} options={{ presentation: 'modal' }} />
@@ -99,6 +102,7 @@ function Root() {
       <Stack.Screen name="NewVisitor" component={NewVisitorScreen} />
       <Stack.Screen name="QrPass" component={QrPassScreen} options={{ presentation: 'modal' }} />
     </Stack.Navigator>
+    </SignedInChrome>
   );
 }
 
@@ -106,7 +110,7 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <SessionProvider>
-        <NavigationContainer theme={navTheme}>
+        <NavigationContainer ref={navigationRef} theme={navTheme}>
           <StatusBar style="dark" />
           <Root />
         </NavigationContainer>

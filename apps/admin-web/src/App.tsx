@@ -19,6 +19,7 @@ import { AmenitiesPage } from './pages/AmenitiesPage.tsx';
 import { BookingsPage } from './pages/BookingsPage.tsx';
 import { ReportsPage } from './pages/ReportsPage.tsx';
 import { SettingsPage } from './pages/SettingsPage.tsx';
+import { MemberHomePage } from './pages/MemberHomePage.tsx';
 
 /** Route tree. Everything below `/` requires an authenticated tenant session. */
 export function App() {
@@ -63,6 +64,7 @@ export function App() {
         <Route path="/bookings" element={<BookingsPage />} />
         <Route path="/reports" element={<ReportsPage />} />
         <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/my-home" element={<MemberHomePage />} />
         <Route path="*" element={<NotFound />} />
       </Route>
     </Routes>

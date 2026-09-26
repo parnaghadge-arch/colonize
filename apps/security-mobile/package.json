@@ -6,8 +6,8 @@
   "main": "index.ts",
   "scripts": {
     "predev": "npm run build -w @colonize/shared --if-present",
-    "dev": "expo start",
-    "start": "expo start",
+    "dev": "expo start --go",
+    "start": "expo start --go",
     "web": "expo start --web",
     "android": "expo run:android",
     "ios": "expo run:ios",

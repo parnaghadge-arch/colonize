@@ -32,6 +32,8 @@ interface SessionValue {
   selectSociety: (societyId: string) => Promise<void>;
   logout: () => Promise<void>;
   refresh: () => Promise<WhoAmI | null>;
+  /** Switch a dual-role admin between managing the society and acting as a resident. */
+  setActingClient: (client: 'console' | 'resident') => Promise<WhoAmI | null>;
   can: (permission: string) => boolean;
   canAny: (...permissions: string[]) => boolean;
   hasModule: (moduleKey: string) => boolean;
@@ -147,6 +149,21 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const setActingClient = useCallback(async (client: 'console' | 'resident') => {
+    const previous = tokenStore.client;
+    tokenStore.setClient(client);
+    try {
+      const me = await loadWhoami();
+      if (!me) throw new Error('Could not switch mode');
+      return me;
+    } catch (err) {
+      if (previous) tokenStore.setClient(previous);
+      else localStorage.removeItem('colonize.admin.client');
+      await loadWhoami();
+      throw err;
+    }
+  }, [loadWhoami]);
+
   const permissions = useMemo(() => new Set(who?.permissions ?? []), [who]);
   const modules = useMemo(() => new Set(who?.enabledModules ?? []), [who]);
 
@@ -161,11 +178,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       selectSociety,
       logout,
       refresh: loadWhoami,
+      setActingClient,
       can: (permission: string) => permissions.has(permission),
       canAny: (...perms: string[]) => perms.some((p) => permissions.has(p)),
       hasModule: (moduleKey: string) => modules.has(moduleKey),
     }),
-    [status, who, error, login, sendOtp, verifyOtp, selectSociety, logout, loadWhoami, permissions, modules],
+    [status, who, error, login, sendOtp, verifyOtp, selectSociety, logout, loadWhoami, setActingClient, permissions, modules],
   );
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;

@@ -39,6 +39,9 @@ export interface ClientHints {
   isSecurityScope: boolean;
   isVendorScope: boolean;
   isPlatformUser: boolean;
+  actingAs?: 'resident' | 'console' | 'security' | 'other';
+  canActAsResident?: boolean;
+  canManageSociety?: boolean;
 }
 
 export interface WhoAmI {

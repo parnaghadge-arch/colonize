@@ -18,6 +18,9 @@ import { AuditService } from '../../services/audit.js';
 import { databases } from '../../db/manager.js';
 import { getAllSettings, updateSettings, type SettingsNamespace } from '../../services/settings.js';
 import { DEFAULT_SETTINGS } from '../../db/seedTenant.js';
+import { createResident } from '../residents/residentsService.js';
+import { invalidateSociety } from '../../services/cache.js';
+import { linkHomeSchema } from '@colonize/shared/validation';
 import type { Document, TenantDatabase } from '../../db/drivers/types.js';
 
 /**
@@ -207,6 +210,66 @@ societyRouter.patch(
         omit: ['provisioning', 'onboardingStep', 'createdByPlatformUserId'],
       }),
       'Society profile updated',
+    );
+  }),
+);
+
+/**
+ * POST /api/society/me/home
+ *
+ * A society administrator is also a resident. This links their own login to a flat so they
+ * can switch into the resident app (or "My home" in this console) without a second account.
+ */
+societyRouter.post(
+  '/me/home',
+  authenticate({ clientScopes: ['console'] }),
+  requirePermission('resident:create', 'society:update', 'society:manage'),
+  validate(linkHomeSchema),
+  asyncHandler(async (req, res) => {
+    const c = requireTenantContext(req);
+    const body = req.body as z.infer<typeof linkHomeSchema>;
+    const user = await c.db.collection('users').findById(c.principal.userId);
+    if (!user) throw ApiError.notFound('User');
+    const phone = user.phone ? String(user.phone) : null;
+    const email = user.email ? String(user.email) : null;
+    if (!phone && !email) throw ApiError.badRequest('Add a phone number or email to your account before linking a flat.');
+
+    const resident = await createResident(
+      { db: c.db, societyId: c.society.id, actorId: c.principal.userId, actorName: c.principal.fullName },
+      {
+        unitId: body.unitId,
+        fullName: String(user.fullName ?? c.principal.fullName ?? 'Resident'),
+        phone,
+        email,
+        kind: body.kind,
+        isPrimary: true,
+        createLogin: true,
+      },
+    );
+
+    if (String(resident.userId ?? '') !== c.principal.userId) {
+      await c.db.collection('residents').updateOne({ _id: resident._id }, { $set: { userId: c.principal.userId } });
+      await c.db.collection('unit_members').updateMany(
+        { societyId: c.society.id, residentId: resident._id, unitId: body.unitId },
+        { $set: { userId: c.principal.userId, isActive: true } },
+      );
+      resident.userId = c.principal.userId;
+    }
+
+    const role = body.kind === 'TENANT' ? 'TENANT' : 'OWNER';
+    const roles = Array.from(new Set([...(Array.isArray(user.roles) ? user.roles.map(String) : []), role]));
+    await c.db.collection('users').updateOne({ _id: user._id }, { $set: { roles, updatedAt: new Date(), updatedBy: c.principal.userId } });
+    invalidateSociety(c.society.id);
+
+    const unit = await c.db.collection('units').findOne({ societyId: c.society.id, _id: body.unitId });
+    return ok(
+      res,
+      {
+        resident: serialise(resident),
+        unit: unit ? { id: unit._id, label: unit.label ?? unit.unitNumber } : null,
+        roles,
+      },
+      'Flat linked. You can now act as a resident.',
     );
   }),
 );
@@ -433,6 +496,7 @@ const NAMESPACE_LABELS: Record<string, string> = {
   visitor: 'Visitors and gate',
   delivery: 'Deliveries',
   maintenance: 'Maintenance billing',
+  payments: 'Payments and gateway',
   amenity: 'Amenities and bookings',
   complaint: 'Complaints and SLAs',
   security: 'Security operations',
@@ -447,7 +511,8 @@ const NAMESPACE_LABELS: Record<string, string> = {
 const NAMESPACE_DESCRIPTIONS: Record<string, string> = {
   visitor: 'Approval rules, night entry, pass validity and QR reuse at the gate.',
   delivery: 'Whether deliveries need approval, how long they may stay, and who is notified.',
-  maintenance: 'Bill generation day, due day, grace period, late fees and the charges per unit.',
+  maintenance: 'Billing cycle (monthly, quarterly, half-yearly or yearly), due day, grace period, late fees and the charges per unit.',
+  payments: 'Which ways residents can pay, the society UPI ID, and the online gateway keys.',
   amenity: 'Approval, how far ahead residents may book, cancellation windows and refunds.',
   complaint: 'SLA hours by priority, auto-assignment rules and the resident verification window.',
   security: 'Gate count, vehicle checks, patrol intervals and offline sync for the guard app.',

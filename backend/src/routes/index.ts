@@ -30,6 +30,7 @@ import {
   incomesRouter,
 } from '../modules/finance/financeRouter.js';
 import { filesRouter, platformUploadsRouter } from '../modules/files/filesRouter.js';
+import { RESIDENT_APP_ROLES, SOCIETY_ROLE_LIST } from '@colonize/shared';
 import { authenticate, requireTenantContext } from '../middleware/authenticate.js';
 import { asyncHandler } from '../middleware/errors.js';
 import { validate } from '../middleware/validate.js';
@@ -187,6 +188,9 @@ apiRouter.get(
         isSecurityScope: c.principal.isSecurityScope,
         isVendorScope: c.principal.isVendorScope,
         isPlatformUser: c.principal.isPlatformUser,
+        actingAs: c.principal.actingAs,
+        canActAsResident: c.principal.roles.some((role) => (RESIDENT_APP_ROLES as readonly string[]).includes(role)) && c.membership.unitIds.length > 0,
+        canManageSociety: c.principal.roles.some((role) => (SOCIETY_ROLE_LIST as readonly string[]).includes(role)),
       },
     }, 'Authenticated');
   }),

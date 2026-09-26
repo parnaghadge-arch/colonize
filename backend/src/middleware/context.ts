@@ -1,6 +1,7 @@
 import type { Document } from '../db/drivers/types.js';
 import type { TenantDatabase } from '../db/drivers/types.js';
 import { ApiError } from '../utils/errors.js';
+import type { ActingClient } from './actingClient.js';
 
 /**
  * Request context types (§5, §51).
@@ -48,7 +49,12 @@ export interface PrincipalContext {
   sessionId: string | null;
   deviceId: string | null;
   isPlatformUser: boolean;
-  /** True for OWNER/TENANT/FAMILY_MEMBER — used to narrow data to the caller's own unit. */
+  /**
+   * The client this request is acting as. For a dual-role admin this follows `x-client`,
+   * not the mere presence of a resident role.
+   */
+  actingAs: ActingClient;
+  /** True when this request is acting as a resident — used to narrow data to the caller's own unit. */
   isResidentScope: boolean;
   /** True for SECURITY_GUARD/SECURITY_SUPERVISOR. */
   isSecurityScope: boolean;

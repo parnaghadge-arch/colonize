@@ -15,6 +15,7 @@ const BASE_URL: string = (import.meta.env.VITE_API_URL as string | undefined) ??
 
 const TOKEN_KEY = 'colonize.admin.accessToken';
 const SOCIETY_KEY = 'colonize.admin.societyId';
+const CLIENT_KEY = 'colonize.admin.client';
 
 export interface FieldError {
   field?: string;
@@ -71,9 +72,18 @@ export const tokenStore = {
   setSociety(societyId: string): void {
     localStorage.setItem(SOCIETY_KEY, societyId);
   },
+  /** `resident` when an admin is acting as a member. Absent means the server default (console for managers). */
+  get client(): 'console' | 'resident' | null {
+    const value = localStorage.getItem(CLIENT_KEY);
+    return value === 'resident' || value === 'console' ? value : null;
+  },
+  setClient(client: 'console' | 'resident'): void {
+    localStorage.setItem(CLIENT_KEY, client);
+  },
   clear(): void {
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(SOCIETY_KEY);
+    localStorage.removeItem(CLIENT_KEY);
   },
 };
 
@@ -135,6 +145,7 @@ export async function requestEnvelope<T>(path: string, options: RequestOptions =
     if (token) headers.Authorization = `Bearer ${token}`;
     const societyId = tokenStore.societyId;
     if (societyId) headers['x-society-id'] = societyId;
+    if (tokenStore.client) headers['x-client'] = tokenStore.client;
   }
 
   let response: Response;

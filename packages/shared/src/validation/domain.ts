@@ -11,6 +11,8 @@ import {
   EVENT_STATUS,
   LEDGER_TYPES,
   NOTICE_TYPES,
+  BILLING_PERIOD_PATTERN,
+  MAINTENANCE_CYCLES,
   PAYMENT_MODES,
   PAYMENT_PURPOSES,
   SERVICE_REQUEST_TYPES,
@@ -328,8 +330,8 @@ export type BillItemInput = z.infer<typeof billItemSchema>;
 
 export const createBillSchema = z.object({
   unitId: idSchema,
-  /** `YYYY-MM` billing period. */
-  period: z.string().regex(/^\d{4}-\d{2}$/, 'Use the format YYYY-MM'),
+  /** `YYYY-MM`, `YYYY-Q1`, `YYYY-H1` or `YYYY`, matching the society's maintenance cycle. */
+  period: z.string().trim().regex(BILLING_PERIOD_PATTERN, 'Use YYYY-MM, YYYY-Q1, YYYY-H1 or YYYY'),
   dueDate: dateStringSchema,
   items: z.array(billItemSchema).min(1).max(60),
   discount: moneySchema.default(0),
@@ -342,8 +344,13 @@ export type CreateBillInput = z.infer<typeof createBillSchema>;
 export const updateBillSchema = createBillSchema.partial().omit({ unitId: true, period: true });
 
 /** Bulk generation for a whole society / building (§62 scheduled task also uses this). */
+export const billingPeriodSchema = z
+  .string()
+  .trim()
+  .regex(BILLING_PERIOD_PATTERN, 'Use YYYY-MM, YYYY-Q1, YYYY-H1 or YYYY');
+
 export const generateBillsSchema = z.object({
-  period: z.string().regex(/^\d{4}-\d{2}$/),
+  period: billingPeriodSchema,
   dueDate: dateStringSchema,
   scope: z.enum(['ALL', 'BUILDING', 'WING', 'UNITS']).default('ALL'),
   buildingIds: z.array(idSchema).max(500).default([]),
@@ -412,6 +419,41 @@ export const refundPaymentSchema = z.object({
   fullRefund: z.boolean().default(false),
 });
 export type RefundPaymentInput = z.infer<typeof refundPaymentSchema>;
+
+/** A resident's claim that money was sent by UPI, QR, cash or cheque. It is not captured until the office confirms it. */
+export const RESIDENT_CLAIM_MODES = ['UPI', 'QR', 'CASH', 'CHEQUE'] as const;
+export const claimPaymentSchema = z.object({
+  billId: idSchema,
+  mode: z.enum(RESIDENT_CLAIM_MODES),
+  amount: moneySchema.optional(),
+  referenceNumber: z.string().trim().max(80).optional(),
+  chequeNumber: z.string().trim().max(40).optional(),
+  bankName: z.string().trim().max(80).optional(),
+  chequeDate: z.string().trim().max(20).optional(),
+  note: z.string().trim().max(300).optional(),
+  clientRequestId: z.string().trim().min(6).max(80).optional(),
+});
+export type ClaimPaymentInput = z.infer<typeof claimPaymentSchema>;
+
+export const gatewaySettingsSchema = z.object({
+  provider: z.enum(['inherit', 'mock', 'razorpay', 'none']),
+  keyId: z.string().trim().max(120).optional(),
+  /** Blank means "keep the secret already stored". */
+  keySecret: z.string().trim().max(200).optional(),
+  webhookSecret: z.string().trim().max(200).optional(),
+  upiVpa: z.string().trim().max(80).optional(),
+  payeeName: z.string().trim().max(80).optional(),
+  methods: z.array(z.enum(['UPI', 'QR', 'ONLINE', 'CASH', 'CHEQUE'])).min(1).max(5).optional(),
+});
+export type GatewaySettingsInput = z.infer<typeof gatewaySettingsSchema>;
+
+export const linkHomeSchema = z.object({
+  unitId: idSchema,
+  kind: z.enum(['OWNER', 'TENANT']).default('OWNER'),
+});
+export type LinkHomeInput = z.infer<typeof linkHomeSchema>;
+
+export const maintenanceCycleSchema = z.enum(MAINTENANCE_CYCLES);
 
 export const gatewayWebhookSchema = z.object({
   provider: z.string().trim().max(40),

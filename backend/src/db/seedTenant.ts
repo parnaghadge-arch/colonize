@@ -86,6 +86,18 @@ export const DEFAULT_SETTINGS: Record<string, Record<string, unknown>> = {
     billableMemberKind: 'OWNER',
     includeSinkingFund: false,
     sinkingFundPerUnit: 0,
+    /** MONTHLY | QUARTERLY | HALF_YEARLY | YEARLY. Recurring charges are multiplied by the cycle length; arrears are not. */
+    cycle: 'MONTHLY',
+  },
+  payments: {
+    /** inherit = use the server PAYMENT_GATEWAY env. razorpay/mock/none override it for this society. */
+    provider: 'inherit',
+    keyId: '',
+    keySecret: '',
+    webhookSecret: '',
+    upiVpa: '',
+    payeeName: '',
+    methods: ['UPI', 'QR', 'ONLINE', 'CASH', 'CHEQUE'],
   },
   amenity: {
     requireApproval: false,

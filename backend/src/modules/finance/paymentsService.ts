@@ -5,6 +5,8 @@ import { nextReference } from '../../services/counters.js';
 import { NotificationService } from '../../services/notifications/index.js';
 import { logger } from '../../config/logger.js';
 import * as gateway from '../../services/paymentGateway.js';
+import { getSettings, updateSettings } from '../../services/settings.js';
+import { renderQr } from '../../services/qr.js';
 import * as accounting from './accountingService.js';
 import * as billing from './billingService.js';
 import { confirmBookingAfterPayment } from '../amenities/amenityService.js';
@@ -37,6 +39,84 @@ export interface PaymentsContext {
 
 function round2(value: number): number {
   return Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+}
+
+const RESIDENT_METHODS = ['UPI', 'QR', 'ONLINE', 'CASH', 'CHEQUE'] as const;
+type ResidentMethod = (typeof RESIDENT_METHODS)[number];
+
+function enabledMethods(settings: Document): ResidentMethod[] {
+  const raw = settings.methods;
+  if (!Array.isArray(raw) || raw.length === 0) return [...RESIDENT_METHODS];
+  const picked = raw.map(String).filter((method): method is ResidentMethod => (RESIDENT_METHODS as readonly string[]).includes(method));
+  return picked.length ? picked : [...RESIDENT_METHODS];
+}
+
+async function loadPaymentSettings(ctx: PaymentsContext): Promise<Document> {
+  return getSettings({ db: ctx.db, societyId: ctx.societyId }, 'payments');
+}
+
+async function resolveSocietyGateway(ctx: PaymentsContext): Promise<{
+  provider: gateway.GatewayProvider;
+  credentials?: gateway.GatewayCredentials;
+  settings: Document;
+}> {
+  const settings = await loadPaymentSettings(ctx);
+  const configured = String(settings.provider ?? 'inherit');
+  const keyId = String(settings.keyId ?? '').trim();
+  const keySecret = String(settings.keySecret ?? '').trim();
+  const credentials = keyId && keySecret ? { keyId, keySecret } : undefined;
+
+  if (configured === 'none') return { provider: 'none', settings };
+  if (configured === 'mock') return { provider: 'mock', settings };
+  if (configured === 'razorpay') return { provider: 'razorpay', credentials, settings };
+  const provider = gateway.resolveProvider();
+  return { provider, credentials: provider === 'razorpay' ? credentials : undefined, settings };
+}
+
+function publicGateway(settings: Document) {
+  return {
+    provider: String(settings.provider ?? 'inherit'),
+    keyId: String(settings.keyId ?? ''),
+    keySecretSet: Boolean(String(settings.keySecret ?? '').trim()),
+    webhookSecretSet: Boolean(String(settings.webhookSecret ?? '').trim()),
+    upiVpa: String(settings.upiVpa ?? ''),
+    payeeName: String(settings.payeeName ?? ''),
+    methods: enabledMethods(settings),
+  };
+}
+
+async function razorpayCheckout(
+  referenceNumber: string,
+  amount: number,
+  notes: Record<string, string>,
+  credentials?: gateway.GatewayCredentials,
+): Promise<gateway.CreatedOrder> {
+  const link = await gateway.createPaymentLink({
+    amount,
+    currency: 'INR',
+    description: notes.invoiceNumber ? `Bill ${notes.invoiceNumber}` : `Payment ${referenceNumber}`,
+    referenceId: referenceNumber,
+    credentials,
+  });
+  return {
+    provider: 'razorpay',
+    orderId: link.id,
+    amount,
+    currency: 'INR',
+    keyId: credentials?.keyId ?? null,
+    checkoutUrl: link.shortUrl,
+  };
+}
+
+export function buildUpiUri(input: { vpa: string; payeeName: string; amount?: number | null; note?: string }): string {
+  const pairs: Array<[string, string]> = [
+    ['pa', input.vpa],
+    ['pn', input.payeeName || 'Society'],
+    ['cu', 'INR'],
+  ];
+  if (input.amount && input.amount > 0) pairs.push(['am', input.amount.toFixed(2)]);
+  if (input.note) pairs.push(['tn', input.note.slice(0, 80)]);
+  return `upi://pay?${pairs.map(([key, value]) => `${key}=${encodeURIComponent(value)}`).join('&')}`;
 }
 
 export type PaymentPurpose = 'MAINTENANCE' | 'AMENITY_BOOKING' | 'PARKING' | 'SERVICE_CHARGE' | 'EVENT_FEE' | 'FINE' | 'DONATION' | 'SUBSCRIPTION' | 'OTHER';
@@ -129,24 +209,31 @@ export async function createIntent(ctx: PaymentsContext, input: IntentInput): Pr
     }
   }
 
-  const provider = gateway.resolveProvider(input.provider);
+  const societyGateway = await resolveSocietyGateway(ctx);
+  const provider = input.provider ? gateway.resolveProvider(input.provider) : societyGateway.provider;
+  if (provider === 'none' || !enabledMethods(societyGateway.settings).includes('ONLINE')) {
+    throw ApiError.badRequest('Online payments are turned off for this society. Pay by UPI, QR, cash or cheque, and the office will confirm it.');
+  }
   const referenceNumber = await nextReference({ db: ctx.db, societyId: ctx.societyId, kind: 'RECEIPT' });
 
-  const order = await gateway.createOrder({
-    amount,
-    currency: 'INR',
-    receipt: referenceNumber,
-    notes: {
-      societyId: ctx.societyId,
-      purpose: input.purpose,
-      ...(bill ? { billId: String(bill._id), invoiceNumber: String(bill.invoiceNumber) } : {}),
-      ...(booking ? { bookingId: String(booking._id), referenceNumber: String(booking.referenceNumber) } : {}),
-      ...(event ? { eventId: String(event._id), eventName: String(event.name) } : {}),
-      ...(serviceRequest ? { serviceRequestId: String(serviceRequest._id), referenceNumber: String(serviceRequest.referenceNumber ?? '') } : {}),
-      ...(unitId ? { unitId } : {}),
-    },
-    provider,
-  });
+  const notes = {
+    societyId: ctx.societyId,
+    purpose: input.purpose,
+    ...(bill ? { billId: String(bill._id), invoiceNumber: String(bill.invoiceNumber) } : {}),
+    ...(booking ? { bookingId: String(booking._id), referenceNumber: String(booking.referenceNumber) } : {}),
+    ...(event ? { eventId: String(event._id), eventName: String(event.name) } : {}),
+    ...(serviceRequest ? { serviceRequestId: String(serviceRequest._id), referenceNumber: String(serviceRequest.referenceNumber ?? '') } : {}),
+    ...(unitId ? { unitId } : {}),
+  };
+  const order = provider === 'razorpay'
+    ? await razorpayCheckout(referenceNumber, amount, notes, societyGateway.credentials)
+    : await gateway.createOrder({
+        amount,
+        currency: 'INR',
+        receipt: referenceNumber,
+        notes,
+        provider,
+      });
 
   const paymentId = newId('payments');
   const payment = await ctx.db.collection('payments').create({
@@ -258,6 +345,7 @@ export async function createIntent(ctx: PaymentsContext, input: IntentInput): Pr
       // Only the deterministic dev provider returns a ready-made signature; a live gateway
       // never does, because the signature must come from the provider's own checkout.
       ...(gateway.isLiveProvider(order.provider) ? {} : { mockPaymentId: order.mockPaymentId, mockSignature: order.mockSignature }),
+      ...(order.checkoutUrl ? { checkoutUrl: order.checkoutUrl } : {}),
       isLiveProvider: gateway.isLiveProvider(order.provider),
     },
     duplicate: false,
@@ -290,11 +378,13 @@ export async function verifyAndApply(ctx: PaymentsContext, input: VerifyInput): 
   }
 
   const provider = (payment.provider ?? gateway.resolveProvider()) as gateway.GatewayProvider;
+  const societyGateway = provider === 'razorpay' ? await resolveSocietyGateway(ctx) : null;
   const verification = gateway.verifyPayment({
     provider,
     orderId: String(payment.providerOrderId ?? ''),
     paymentId: input.providerPaymentId,
     signature: input.signature,
+    keySecret: societyGateway?.credentials?.keySecret,
   });
 
   await ctx.db.collection('payment_transactions').create({
@@ -679,7 +769,19 @@ export async function recordOfflinePayment(ctx: PaymentsContext, input: OfflineI
 
 async function createPaymentRecord(
   ctx: PaymentsContext,
-  input: { amount: number; purpose: PaymentPurpose; unitId: string | null; billId: string | null; bookingId: string | null; mode: string; referenceNote: string | null },
+  input: {
+    amount: number;
+    purpose: PaymentPurpose;
+    unitId: string | null;
+    billId: string | null;
+    bookingId: string | null;
+    mode: string;
+    referenceNote: string | null;
+    status?: string;
+    metadata?: Document | null;
+    clientRequestId?: string | null;
+    collectedBy?: string | null;
+  },
 ): Promise<Document> {
   const referenceNumber = await nextReference({ db: ctx.db, societyId: ctx.societyId, kind: 'RECEIPT' });
   return ctx.db.collection('payments').create({
@@ -690,7 +792,7 @@ async function createPaymentRecord(
     residentId: null,
     userId: ctx.actorId,
     purpose: input.purpose,
-    status: 'INITIATED',
+    status: input.status ?? 'INITIATED',
     amount: round2(input.amount),
     currency: 'INR',
     paidAmount: 0,
@@ -718,11 +820,11 @@ async function createPaymentRecord(
     gatewayMessage: null,
     signatureVerified: false,
     isOffline: true,
-    collectedBy: ctx.actorId,
-    clientRequestId: null,
+    collectedBy: input.collectedBy === undefined ? ctx.actorId : input.collectedBy,
+    clientRequestId: input.clientRequestId ?? null,
     transactions: [],
     webhookReceivedAt: null,
-    metadata: null,
+    metadata: input.metadata ?? null,
     createdBy: ctx.actorId,
     updatedBy: ctx.actorId,
   });
@@ -742,9 +844,16 @@ export async function refundPayment(ctx: PaymentsContext, paymentId: string, inp
   if (requested + alreadyRefunded > Number(payment.amount) + 0.01) throw ApiError.badRequest('The refund exceeds the amount paid');
 
   const provider = (payment.provider ?? 'mock') as gateway.GatewayProvider;
+  const societyGateway = provider === 'razorpay' ? await resolveSocietyGateway(ctx) : null;
   const result = payment.isOffline
     ? { provider: 'none' as const, refundId: `offline_${newId('payments')}`, amount: requested, status: 'processed' }
-    : await gateway.refund({ provider, paymentId: String(payment.providerPaymentId ?? payment._id), amount: requested, reason: input.reason });
+    : await gateway.refund({
+        provider,
+        paymentId: String(payment.providerPaymentId ?? payment._id),
+        amount: requested,
+        reason: input.reason,
+        credentials: societyGateway?.credentials,
+      });
 
   const newRefunded = round2(alreadyRefunded + requested);
   const status = newRefunded >= Number(payment.amount) - 0.01 ? 'REFUNDED' : 'PARTIALLY_REFUNDED';
@@ -803,6 +912,197 @@ export async function refundPayment(ctx: PaymentsContext, paymentId: string, inp
   });
 
   return { paymentId, refundId: result.refundId, amount: requested, status, journalEntryId: entry._id };
+}
+
+/* --------------------------- resident claims & gateway --------------------------- */
+
+export async function paymentOptions(ctx: PaymentsContext): Promise<Document> {
+  const choice = await resolveSocietyGateway(ctx);
+  const methods = enabledMethods(choice.settings);
+  const vpa = String(choice.settings.upiVpa ?? '').trim();
+  return {
+    methods,
+    upiVpa: vpa || null,
+    payeeName: String(choice.settings.payeeName ?? '').trim() || null,
+    provider: choice.provider,
+    onlineEnabled: methods.includes('ONLINE') && choice.provider !== 'none',
+    qrAvailable: Boolean(vpa) && methods.includes('QR'),
+    upiAvailable: Boolean(vpa) && methods.includes('UPI'),
+  };
+}
+
+export async function gatewaySettingsView(ctx: PaymentsContext): Promise<Document> {
+  return publicGateway(await loadPaymentSettings(ctx));
+}
+
+export async function saveGatewaySettings(
+  ctx: PaymentsContext,
+  patch: {
+    provider?: string;
+    keyId?: string;
+    keySecret?: string;
+    webhookSecret?: string;
+    upiVpa?: string;
+    payeeName?: string;
+    methods?: string[];
+  },
+): Promise<Document> {
+  const next: Document = {};
+  if (patch.provider) next.provider = patch.provider;
+  if (patch.keyId !== undefined) next.keyId = patch.keyId.trim();
+  if (patch.keySecret?.trim()) next.keySecret = patch.keySecret.trim();
+  if (patch.webhookSecret?.trim()) next.webhookSecret = patch.webhookSecret.trim();
+  if (patch.upiVpa !== undefined) next.upiVpa = patch.upiVpa.trim();
+  if (patch.payeeName !== undefined) next.payeeName = patch.payeeName.trim();
+  if (patch.methods?.length) next.methods = patch.methods;
+  const saved = await updateSettings({ db: ctx.db, societyId: ctx.societyId }, 'payments', next, ctx.actorId);
+  return publicGateway(saved);
+}
+
+export async function upiQr(
+  ctx: PaymentsContext,
+  input: { billId?: string; amount?: number; note?: string },
+): Promise<Document> {
+  const settings = await loadPaymentSettings(ctx);
+  const vpa = String(settings.upiVpa ?? '').trim();
+  if (!vpa) throw ApiError.badRequest('This society has not set a UPI ID yet. Add one under Payments.');
+  let amount = input.amount ?? null;
+  let note = input.note ?? 'Maintenance';
+  if (input.billId) {
+    const bill = await ctx.db.collection('maintenance_bills').findOne({ societyId: ctx.societyId, _id: input.billId });
+    if (!bill) throw ApiError.notFound('Bill');
+    if (ctx.isResidentScope && !(ctx.unitIds ?? []).includes(String(bill.unitId))) {
+      throw ApiError.forbidden('You can only pay bills for your own flat');
+    }
+    amount = Number(bill.dueAmount ?? 0);
+    note = `Bill ${String(bill.invoiceNumber ?? input.billId)}`;
+  }
+  const payeeName = String(settings.payeeName ?? '').trim() || 'Society';
+  const uri = buildUpiUri({ vpa, payeeName, amount, note });
+  return { uri, dataUrl: await renderQr(uri, 360), vpa, payeeName, amount };
+}
+
+/**
+ * A resident says they have paid by UPI, QR, cash or cheque.
+ * The money is not applied until an administrator confirms the claim.
+ */
+export async function claimPayment(
+  ctx: PaymentsContext,
+  input: {
+    billId: string;
+    mode: 'UPI' | 'QR' | 'CASH' | 'CHEQUE';
+    amount?: number;
+    referenceNumber?: string;
+    chequeNumber?: string;
+    bankName?: string;
+    chequeDate?: string;
+    note?: string;
+    clientRequestId?: string;
+  },
+): Promise<Document> {
+  if (!ctx.isResidentScope) throw ApiError.forbidden('Only a resident can submit a payment for the office to confirm');
+  const settings = await loadPaymentSettings(ctx);
+  if (!enabledMethods(settings).includes(input.mode)) {
+    throw ApiError.badRequest(`${input.mode === 'QR' ? 'QR' : input.mode.toLowerCase()} payments are not enabled for this society`);
+  }
+  if ((input.mode === 'UPI' || input.mode === 'QR') && !String(settings.upiVpa ?? '').trim()) {
+    throw ApiError.badRequest('This society has not set a UPI ID yet');
+  }
+
+  const bill = await ctx.db.collection('maintenance_bills').findOne({ societyId: ctx.societyId, _id: input.billId });
+  if (!bill) throw ApiError.notFound('Bill');
+  if (!(ctx.unitIds ?? []).includes(String(bill.unitId))) throw ApiError.forbidden('You can only pay bills for your own flat');
+  const due = Number(bill.dueAmount ?? 0);
+  const amount = round2(input.amount ?? due);
+  if (amount <= 0) throw ApiError.badRequest('There is nothing to pay on this bill');
+  if (amount > due + 0.01) throw ApiError.badRequest(`Only ₹${due} is due on this bill`);
+
+  if (input.clientRequestId) {
+    const existing = await ctx.db.collection('payments').findOne({ societyId: ctx.societyId, clientRequestId: input.clientRequestId });
+    if (existing) return existing;
+  }
+
+  const reference = [input.referenceNumber, input.chequeNumber, input.bankName, input.chequeDate, input.note].filter(Boolean).join(' — ');
+  const payment = await createPaymentRecord(ctx, {
+    amount,
+    purpose: 'MAINTENANCE',
+    unitId: String(bill.unitId),
+    billId: String(bill._id),
+    bookingId: null,
+    mode: input.mode === 'QR' ? 'UPI' : input.mode,
+    referenceNote: reference || null,
+    status: 'PENDING',
+    collectedBy: null,
+    clientRequestId: input.clientRequestId ?? null,
+    metadata: {
+      claim: {
+        mode: input.mode,
+        referenceNumber: input.referenceNumber ?? null,
+        chequeNumber: input.chequeNumber ?? null,
+        bankName: input.bankName ?? null,
+        chequeDate: input.chequeDate ?? null,
+        note: input.note ?? null,
+        submittedAt: new Date().toISOString(),
+      },
+    },
+  });
+  return payment;
+}
+
+export async function confirmClaim(ctx: PaymentsContext, paymentId: string, note?: string): Promise<Document> {
+  if (ctx.isResidentScope) throw ApiError.forbidden('A resident cannot confirm their own payment');
+  const payment = await ctx.db.collection('payments').findOne({ societyId: ctx.societyId, _id: paymentId });
+  if (!payment) throw ApiError.notFound('Payment');
+  if (String(payment.status) === 'SUCCESS') return { payment, alreadyProcessed: true };
+  if (String(payment.status) !== 'PENDING' || !payment.metadata?.claim) {
+    throw ApiError.conflict('Only a resident payment that is waiting for confirmation can be confirmed');
+  }
+  return applySuccessfulPayment(ctx, payment, {
+    mode: String(payment.mode ?? 'CASH'),
+    amount: Number(payment.amount),
+    signatureVerified: false,
+    collectedBy: ctx.actorId,
+    referenceNote: note ?? payment.referenceNote ?? null,
+    provider: 'none',
+  });
+}
+
+export async function rejectClaim(ctx: PaymentsContext, paymentId: string, reason: string): Promise<Document> {
+  if (ctx.isResidentScope) throw ApiError.forbidden('A resident cannot reject a payment claim');
+  const payment = await ctx.db.collection('payments').findOne({ societyId: ctx.societyId, _id: paymentId });
+  if (!payment) throw ApiError.notFound('Payment');
+  if (String(payment.status) !== 'PENDING') throw ApiError.conflict('This payment is not waiting for confirmation');
+  await ctx.db.collection('payments').updateOne(
+    { societyId: ctx.societyId, _id: paymentId },
+    { $set: { status: 'CANCELLED', failureReason: reason, updatedBy: ctx.actorId, failedAt: new Date() } },
+  );
+  const fresh = await ctx.db.collection('payments').findOne({ societyId: ctx.societyId, _id: paymentId });
+  return fresh ?? payment;
+}
+
+/** Ask Razorpay whether a hosted payment link has been paid, then apply it. The client does not supply the amount. */
+export async function syncGatewayPayment(ctx: PaymentsContext, paymentId: string): Promise<Document> {
+  const payment = await ctx.db.collection('payments').findOne({ societyId: ctx.societyId, _id: paymentId });
+  if (!payment) throw ApiError.notFound('Payment');
+  if (ctx.isResidentScope && payment.unitId && !(ctx.unitIds ?? []).includes(String(payment.unitId))) {
+    throw ApiError.forbidden('You can only check payments for your own flat');
+  }
+  if (['SUCCESS', 'REFUNDED'].includes(String(payment.status))) return { payment, alreadyProcessed: true };
+  if (String(payment.provider) !== 'razorpay') throw ApiError.badRequest('This payment is not waiting on the online gateway');
+
+  const choice = await resolveSocietyGateway(ctx);
+  const link = await gateway.fetchPaymentLink(String(payment.providerOrderId ?? ''), choice.credentials);
+  const status = String(link.status ?? '').toLowerCase();
+  if (status !== 'paid') throw ApiError.badRequest('The gateway has not confirmed this payment yet. Complete the checkout, then try again.');
+  const payments = Array.isArray(link.payments) ? (link.payments as Document[]) : [];
+  const captured = payments.find((row) => String(row.status ?? '') === 'captured') ?? payments[0];
+  const providerPaymentId = String(captured?.payment_id ?? captured?.id ?? link.id ?? payment.providerOrderId);
+  return applySuccessfulPayment(ctx, payment, {
+    providerPaymentId,
+    mode: 'ONLINE',
+    signatureVerified: true,
+    provider: 'razorpay',
+  });
 }
 
 /* --------------------------------- webhooks --------------------------------- */

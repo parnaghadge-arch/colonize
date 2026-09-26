@@ -171,6 +171,7 @@ export interface PaymentOrder {
   /** Present for the mock gateway so a dev client can complete the flow end to end. */
   mockPaymentId?: string;
   mockSignature?: string;
+  checkoutUrl?: string;
   [key: string]: unknown;
 }
 

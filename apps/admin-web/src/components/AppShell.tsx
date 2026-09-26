@@ -1,7 +1,8 @@
-import { NavLink, Outlet, useLocation } from 'react-router-dom';
-import { useState, type ReactNode } from 'react';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useSession } from '../lib/session.tsx';
-import { Button } from './ui.tsx';
+import { Button, ErrorAlert, Modal } from './ui.tsx';
+import { LinkHomeForm } from './LinkHomeForm.tsx';
 
 /**
  * Console chrome.
@@ -91,9 +92,19 @@ const TITLES: Record<string, { title: string; subtitle: string }> = {
 };
 
 export function AppShell() {
-  const { who, logout, hasModule, can } = useSession();
+  const { who, logout, hasModule, can, setActingClient } = useSession();
   const location = useLocation();
+  const navigate = useNavigate();
   const [loggingOut, setLoggingOut] = useState(false);
+  const [switching, setSwitching] = useState(false);
+  const [switchError, setSwitchError] = useState<unknown>(null);
+  const [linking, setLinking] = useState(false);
+  const memberMode = who?.clientHints?.actingAs === 'resident' && Boolean(who?.clientHints?.canManageSociety);
+  const canManage = Boolean(who?.clientHints?.canManageSociety);
+
+  useEffect(() => {
+    if (memberMode && location.pathname !== '/my-home') navigate('/my-home', { replace: true });
+  }, [memberMode, location.pathname, navigate]);
 
   const groups = NAV.map((group) => ({
     ...group,
@@ -104,7 +115,40 @@ export function AppShell() {
     }),
   })).filter((group) => group.items.length > 0);
 
-  const meta = TITLES[location.pathname] ?? { title: 'Colonize', subtitle: '' };
+  const meta = memberMode
+    ? { title: 'My home', subtitle: 'You are acting as a resident of your own flat' }
+    : TITLES[location.pathname] ?? { title: 'Colonize', subtitle: '' };
+
+  async function actAsResident() {
+    setSwitchError(null);
+    if (!who?.clientHints?.canActAsResident) {
+      setLinking(true);
+      return;
+    }
+    setSwitching(true);
+    try {
+      await setActingClient('resident');
+      navigate('/my-home');
+    } catch (err) {
+      setSwitchError(err);
+      setLinking(true);
+    } finally {
+      setSwitching(false);
+    }
+  }
+
+  async function manageSociety() {
+    setSwitching(true);
+    setSwitchError(null);
+    try {
+      await setActingClient('console');
+      navigate('/');
+    } catch (err) {
+      setSwitchError(err);
+    } finally {
+      setSwitching(false);
+    }
+  }
 
   return (
     <div className="shell">
@@ -125,7 +169,15 @@ export function AppShell() {
         </div>
 
         <nav className="sidebar__nav">
-          {groups.map((group) => (
+          {memberMode ? (
+            <div className="sidebar__group">
+              <span>My home</span>
+              <NavLink to="/my-home" className={({ isActive }) => `sidebar__link${isActive ? ' sidebar__link--active' : ''}`}>
+                <span className="glyph" aria-hidden>⌂</span>
+                My flat
+              </NavLink>
+            </div>
+          ) : groups.map((group) => (
             <div className="sidebar__group" key={group.label}>
               <span>{group.label}</span>
               {group.items.map((item) => (
@@ -170,6 +222,16 @@ export function AppShell() {
             {meta.subtitle ? <p>{meta.subtitle}</p> : null}
           </div>
           <div className="topbar__actions">
+            {canManage ? (
+              <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+                <Button size="sm" variant={memberMode ? 'default' : 'primary'} busy={switching} onClick={() => void manageSociety()}>
+                  Manage society
+                </Button>
+                <Button size="sm" variant={memberMode ? 'primary' : 'default'} busy={switching} onClick={() => void actAsResident()}>
+                  My home
+                </Button>
+              </div>
+            ) : null}
             <PlanBadge />
             <Button
               size="sm"
@@ -185,8 +247,27 @@ export function AppShell() {
           </div>
         </header>
         <main className="content">
+          {switchError && !linking ? <ErrorAlert error={switchError} /> : null}
           <Outlet />
         </main>
+        {linking ? (
+          <Modal title="Link your flat" onClose={() => setLinking(false)}>
+            <LinkHomeForm
+              onLinked={async () => {
+                setLinking(false);
+                setSwitching(true);
+                try {
+                  await setActingClient('resident');
+                  navigate('/my-home');
+                } catch (err) {
+                  setSwitchError(err);
+                } finally {
+                  setSwitching(false);
+                }
+              }}
+            />
+          </Modal>
+        ) : null}
       </div>
     </div>
   );

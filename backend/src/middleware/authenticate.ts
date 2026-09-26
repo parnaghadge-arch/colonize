@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from 'express';
-import { expandPermissions, DEFAULT_ROLE_PERMISSIONS, RESIDENT_APP_ROLES, SECURITY_APP_ROLES, STAFF_ROLES, VENDOR_ROLES } from '@colonize/shared';
+import { expandPermissions, DEFAULT_ROLE_PERMISSIONS, RESIDENT_APP_ROLES, SECURITY_APP_ROLES, SOCIETY_ROLE_LIST, STAFF_ROLES, VENDOR_ROLES } from '@colonize/shared';
+import { resolveActingClient } from './actingClient.js';
 import { databases } from '../db/manager.js';
 import type { TenantDatabase } from '../db/drivers/types.js';
 import { permissionCache, societyCache } from '../services/cache.js';
@@ -217,6 +218,7 @@ export function authenticate(options: AuthenticateOptions = {}) {
           sessionId: claims.sid ?? null,
           deviceId: String(req.headers['x-device-id'] ?? '') || null,
           isPlatformUser: true,
+          actingAs: 'console',
           isResidentScope: false,
           isSecurityScope: false,
           isVendorScope: false,
@@ -320,6 +322,16 @@ export function authenticate(options: AuthenticateOptions = {}) {
       if (roles.length === 0) throw ApiError.forbidden('This account has no role assigned in this society');
 
       const resolved = await resolveTenantAuth(db, societyDoc._id, String(userDoc._id), roles);
+      const hasResidentRole = roles.some((r) => (RESIDENT_APP_ROLES as readonly string[]).includes(r));
+      const hasSocietyRole = roles.some((r) => (SOCIETY_ROLE_LIST as readonly string[]).includes(r));
+      const hasSecurityRole = roles.some((r) => (SECURITY_APP_ROLES as readonly string[]).includes(r));
+      const actingAs = resolveActingClient(headerValue(req, 'x-client'), {
+        hasResidentRole,
+        hasSocietyRole,
+        hasSecurityRole,
+        unitCount: resolved.membership.unitIds.length,
+      });
+      const permissions = actingAs === 'resident' ? narrowToResidentRoles(roles, resolved.permissions) : resolved.permissions;
       const principal: PrincipalContext = {
         userId: String(userDoc._id),
         fullName: String(userDoc.fullName ?? ''),
@@ -327,13 +339,14 @@ export function authenticate(options: AuthenticateOptions = {}) {
         phone: userDoc.phone ? String(userDoc.phone) : null,
         avatarUrl: userDoc.avatarUrl ? String(userDoc.avatarUrl) : null,
         roles,
-        permissions: resolved.permissions,
+        permissions,
         scope: 'tenant',
         sessionId: claims.sid ?? null,
         deviceId: String(req.headers['x-device-id'] ?? '') || null,
         isPlatformUser: false,
-        isResidentScope: roles.some((r) => (RESIDENT_APP_ROLES as readonly string[]).includes(r)),
-        isSecurityScope: roles.some((r) => (SECURITY_APP_ROLES as readonly string[]).includes(r)),
+        actingAs,
+        isResidentScope: actingAs === 'resident',
+        isSecurityScope: actingAs === 'security',
         isVendorScope: roles.some((r) => (Object.values(VENDOR_ROLES) as string[]).includes(r)),
         isStaffScope: roles.some((r) => (Object.values(STAFF_ROLES) as string[]).includes(r)),
         userDoc,
@@ -381,6 +394,24 @@ function emptyMembership(): MembershipContext {
  * Enforce that a token is being used by the right *client*.
  * A resident must not be able to drive the security app with a resident token, and vice versa.
  */
+function headerValue(req: Request, name: string): string | undefined {
+  const raw = req.headers[name];
+  if (Array.isArray(raw)) return raw[0];
+  return raw;
+}
+
+/** Resident mode keeps only the permissions a resident role would have, so managing and living stay separate. */
+function narrowToResidentRoles(roles: string[], current: Set<string>): Set<string> {
+  const allowed = new Set<string>();
+  for (const role of roles) {
+    if (!(RESIDENT_APP_ROLES as readonly string[]).includes(role)) continue;
+    const grants = DEFAULT_ROLE_PERMISSIONS[role as keyof typeof DEFAULT_ROLE_PERMISSIONS] ?? [];
+    for (const permission of expandPermissions(grants)) allowed.add(permission);
+  }
+  if (allowed.size === 0) return current;
+  return new Set([...current].filter((permission) => allowed.has(permission)));
+}
+
 function assertClientScope(
   clientScopes: AuthenticateOptions['clientScopes'],
   principal: PrincipalContext,

@@ -423,6 +423,8 @@ function validationSchemas(): Record<string, JsonSchema> {
     ['CreatePaymentIntentInput', V.createPaymentIntentSchema],
     ['VerifyPaymentInput', V.verifyPaymentSchema],
     ['RecordOfflinePaymentInput', V.recordOfflinePaymentSchema],
+    ['ClaimPaymentInput', V.claimPaymentSchema],
+    ['GatewaySettingsInput', V.gatewaySettingsSchema],
     ['RefundPaymentInput', V.refundPaymentSchema],
     ['CreateLedgerInput', V.createLedgerSchema],
     ['CreateJournalEntryInput', V.createJournalEntrySchema],
@@ -1357,6 +1359,36 @@ export function buildOpenApiDocument(): Record<string, unknown> {
         },
         required: ['payment'],
       }), 'Payment verified and posted to the ledger'), ...STANDARD_ERRORS } }),
+  };
+  paths[`${Py}/options`] = {
+    get: op({ tag: 'Finance', summary: 'Payment methods a resident can use', operationId: 'paymentOptions',
+      description: 'UPI, QR, online gateway, cash and cheque, plus whether a UPI ID is configured. Gateway secrets are never returned.',
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Payment options'), ...STANDARD_ERRORS } }),
+  };
+  paths[`${Py}/upi-qr`] = {
+    get: op({ tag: 'Finance', summary: 'UPI payment QR for a bill', operationId: 'upiQr',
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'UPI URI and QR image'), ...STANDARD_ERRORS } }),
+  };
+  paths[`${Py}/claim`] = {
+    post: op({ tag: 'Finance', summary: 'Submit a UPI, QR, cash or cheque payment for confirmation', operationId: 'claimPayment',
+      description: 'Creates a pending payment. The bill is not reduced until a society administrator confirms it.',
+      body: ref('ClaimPaymentInput'),
+      responses: { 201: okJson(envelope({ type: 'object', additionalProperties: true }), 'Claim submitted'), ...STANDARD_ERRORS } }),
+  };
+  paths[`${Py}/gateway`] = {
+    get: op({ tag: 'Finance', summary: 'Read the society payment gateway settings', operationId: 'getPaymentGateway',
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Gateway settings, secret masked'), ...STANDARD_ERRORS } }),
+    put: op({ tag: 'Finance', summary: 'Update the society payment gateway', operationId: 'updatePaymentGateway',
+      body: ref('GatewaySettingsInput'),
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Gateway updated'), ...STANDARD_ERRORS } }),
+  };
+  paths[`${Py}/{id}/confirm`] = {
+    post: op({ tag: 'Finance', summary: 'Confirm a resident payment claim', operationId: 'confirmPaymentClaim', params: [ID_PARAM],
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Payment confirmed and posted'), ...STANDARD_ERRORS } }),
+  };
+  paths[`${Py}/{id}/sync`] = {
+    post: op({ tag: 'Finance', summary: 'Check a Razorpay payment link and apply it if paid', operationId: 'syncGatewayPayment', params: [ID_PARAM],
+      responses: { 200: okJson(envelope({ type: 'object', additionalProperties: true }), 'Gateway status applied'), ...STANDARD_ERRORS } }),
   };
   paths[`${Py}/offline`] = {
     post: op({ tag: 'Finance', summary: 'Record a cash/cheque/NEFT payment', operationId: 'recordOfflinePayment',

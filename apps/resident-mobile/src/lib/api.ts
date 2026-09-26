@@ -171,6 +171,7 @@ export async function requestEnvelope<T>(path: string, options: RequestOptions =
     const [token, societyId] = await Promise.all([tokenStore.token(), tokenStore.societyId()]);
     if (token) headers.Authorization = `Bearer ${token}`;
     if (societyId) headers['x-society-id'] = societyId;
+    headers['x-client'] = 'resident';
   }
 
   let response: Response;

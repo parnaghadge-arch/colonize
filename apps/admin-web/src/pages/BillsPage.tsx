@@ -40,18 +40,11 @@ function currentPeriod(timezone?: string): string {
   return `${year}-${month}`;
 }
 
-/** All the months bills could plausibly cover, newest first. */
-function periodOptions(timezone?: string, count = 18): string[] {
-  const out: string[] = [];
-  const [yearPart, monthPart] = currentPeriod(timezone).split('-');
-  const year = Number(yearPart) || new Date().getFullYear();
-  const month = Number(monthPart) || 1;
-  const cursor = new Date(Date.UTC(year, month - 1, 1));
-  for (let i = 0; i < count; i += 1) {
-    out.push(`${cursor.getUTCFullYear()}-${String(cursor.getUTCMonth() + 1).padStart(2, '0')}`);
-    cursor.setUTCMonth(cursor.getUTCMonth() - 1);
-  }
-  return out;
+/** Periods for the society's cycle, plus recent months so older monthly bills stay filterable. */
+function periodOptions(timezone?: string, cycle = 'MONTHLY'): string[] {
+  const monthly = monthlyPeriods(timezone);
+  const extra = cyclePeriods(timezone, cycle).filter((period) => !monthly.includes(period));
+  return cycle === 'MONTHLY' ? monthly : [...extra, ...monthly];
 }
 
 interface PreviewRow {
@@ -66,8 +59,10 @@ interface PreviewRow {
 interface GeneratePreview {
   dryRun?: boolean;
   period?: string;
-  bills?: number;
+  generated?: number;
+  bills?: number | PreviewRow[];
   total?: number;
+  totalBilled?: number;
   items?: PreviewRow[];
   rows?: PreviewRow[];
   [key: string]: unknown;
@@ -111,12 +106,53 @@ export function BillsPage() {
   const [detail, setDetail] = useState<Bill | null>(null);
   const [generating, setGenerating] = useState(false);
   const [recording, setRecording] = useState<Bill | null>(null);
+  const billingSettings = useResource<{ cycle?: string }>('/bills/settings');
+  const cycle = String(billingSettings.data?.cycle ?? 'MONTHLY');
+  const [cycleDraft, setCycleDraft] = useState<string | null>(null);
+  const [savingCycle, setSavingCycle] = useState(false);
+  const selectedCycle = cycleDraft ?? cycle;
+  const canSaveCycle = can('setting:update') || can('society:update') || can('society:manage');
+
+  async function saveCycle() {
+    setSavingCycle(true);
+    try {
+      await api.put('/society/settings/maintenance', { value: { cycle: selectedCycle } });
+      setCycleDraft(null);
+      billingSettings.reload();
+      toast.success(`Billing cycle set to ${CYCLES.find((item) => item.id === selectedCycle)?.label ?? selectedCycle}`);
+    } catch (err) {
+      toast.error(err);
+    } finally {
+      setSavingCycle(false);
+    }
+  }
 
   const s = summary.data;
 
   return (
     <div className="stack">
       {bills.error ? <ErrorAlert error={bills.error} /> : null}
+
+      <Card title="Billing cycle" subtitle="Recurring charges are multiplied by the cycle. Previous dues are not.">
+        <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+          {CYCLES.map((item) => (
+            <Button
+              key={item.id}
+              size="sm"
+              variant={selectedCycle === item.id ? 'primary' : 'default'}
+              onClick={() => setCycleDraft(item.id)}
+              disabled={!canSaveCycle}
+            >
+              {item.label}
+            </Button>
+          ))}
+          {canSaveCycle ? (
+            <Button size="sm" variant="ghost" busy={savingCycle} disabled={selectedCycle === cycle} onClick={() => void saveCycle()}>
+              Save cycle
+            </Button>
+          ) : null}
+        </div>
+      </Card>
 
       <div className="tiles">
         <Tile label="Bills raised" value={number(s?.bills)} tone="brand" />
@@ -157,7 +193,7 @@ export function BillsPage() {
               }}
             >
               <option value="">Every period</option>
-              {periodOptions(timezone).map((p) => (
+              {periodOptions(timezone, selectedCycle).map((p) => (
                 <option key={p} value={p}>
                   {formatPeriod(p)}
                 </option>
@@ -258,6 +294,7 @@ export function BillsPage() {
       {generating ? (
         <GenerateBillsForm
           timezone={timezone}
+          cycle={selectedCycle}
           onClose={() => setGenerating(false)}
           onDone={(count) => {
             setGenerating(false);
@@ -276,12 +313,68 @@ function number(value: unknown): string {
   return Number.isFinite(n) ? n.toLocaleString('en-IN') : '0';
 }
 
+const CYCLES = [
+  { id: 'MONTHLY', label: 'Monthly' },
+  { id: 'QUARTERLY', label: 'Quarterly' },
+  { id: 'HALF_YEARLY', label: 'Half-yearly' },
+  { id: 'YEARLY', label: 'Yearly' },
+] as const;
+
 function formatPeriod(period?: string | null): string {
   if (!period) return '—';
-  const [y, m] = String(period).split('-');
-  if (!y || !m) return String(period);
+  const value = String(period);
+  if (/^\d{4}$/.test(value)) return value;
+  const quarter = value.match(/^(\d{4})-Q([1-4])$/);
+  if (quarter) return `Q${quarter[2]} ${quarter[1]}`;
+  const half = value.match(/^(\d{4})-H([12])$/);
+  if (half) return half[2] === '1' ? `Jan–Jun ${half[1]}` : `Jul–Dec ${half[1]}`;
+  const [y, m] = value.split('-');
+  if (!y || !m || Number.isNaN(Number(m))) return value;
   const date = new Date(Date.UTC(Number(y), Number(m) - 1, 1));
+  if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleDateString('en-IN', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+}
+
+function monthlyPeriods(timezone?: string, count = 12): string[] {
+  const out: string[] = [];
+  const [yearPart, monthPart] = currentPeriod(timezone).split('-');
+  const year = Number(yearPart) || new Date().getFullYear();
+  const month = Number(monthPart) || 1;
+  const cursor = new Date(Date.UTC(year, month - 1, 1));
+  for (let i = 0; i < count; i += 1) {
+    out.push(`${cursor.getUTCFullYear()}-${String(cursor.getUTCMonth() + 1).padStart(2, '0')}`);
+    cursor.setUTCMonth(cursor.getUTCMonth() - 1);
+  }
+  return out;
+}
+
+function cyclePeriods(timezone: string | undefined, cycle: string): string[] {
+  const current = currentPeriod(timezone);
+  const year = Number(current.slice(0, 4));
+  const month = Number(current.slice(5, 7)) || 1;
+  if (cycle === 'YEARLY') return [String(year), String(year - 1), String(year + 1)];
+  if (cycle === 'HALF_YEARLY') {
+    return [`${year}-H1`, `${year}-H2`, `${year - 1}-H2`, `${year - 1}-H1`];
+  }
+  if (cycle === 'QUARTERLY') {
+    const out: string[] = [];
+    for (let delta = 1; delta >= -5; delta -= 1) {
+      const cursor = new Date(Date.UTC(year, month - 1 + delta * 3, 1));
+      out.push(`${cursor.getUTCFullYear()}-Q${Math.floor(cursor.getUTCMonth() / 3) + 1}`);
+    }
+    return [...new Set(out)];
+  }
+  return monthlyPeriods(timezone);
+}
+
+function dueDateFor(period: string, dueDay: string): string {
+  const day = String(Math.min(28, Math.max(1, Number(dueDay) || 1))).padStart(2, '0');
+  if (/^\d{4}-\d{2}$/.test(period)) return `${period}-${day}`;
+  const year = period.slice(0, 4);
+  let month = 1;
+  if (period.includes('-Q')) month = (Number(period.slice(-1)) - 1) * 3 + 1;
+  else if (period.endsWith('H2')) month = 7;
+  return `${year}-${String(month).padStart(2, '0')}-${day}`;
 }
 
 function Tile({ label: title, value, tone = 'neutral' }: { label: string; value: string; tone?: string }) {
@@ -613,14 +706,17 @@ function RecordOfflinePaymentForm({ bill, onClose, onDone }: { bill: Bill; onClo
  */
 function GenerateBillsForm({
   timezone,
+  cycle,
   onClose,
   onDone,
 }: {
   timezone?: string;
+  cycle: string;
   onClose: () => void;
   onDone: (count: number) => void;
 }) {
-  const [period, setPeriod] = useState(currentPeriod(timezone));
+  const [runCycle, setRunCycle] = useState(cycle);
+  const [period, setPeriod] = useState(cyclePeriods(timezone, cycle)[0] ?? currentPeriod(timezone));
   const [dueDay, setDueDay] = useState('15');
   const [scope, setScope] = useState<'ALL' | 'UNITS'>('ALL');
   const [unitId, setUnitId] = useState('');
@@ -630,7 +726,7 @@ function GenerateBillsForm({
   const [busy, setBusy] = useState<'preview' | 'generate' | null>(null);
   const [error, setError] = useState<unknown>(null);
 
-  const dueDate = `${period}-${String(Number(dueDay) || 1).padStart(2, '0')}`;
+  const dueDate = dueDateFor(period, dueDay);
 
   function payload(dryRun: boolean) {
     return {
@@ -671,7 +767,9 @@ function GenerateBillsForm({
     }
   }
 
-  const rows = (preview?.items ?? preview?.rows ?? []) as PreviewRow[];
+  const rows = (Array.isArray(preview?.bills) ? preview.bills : preview?.items ?? preview?.rows ?? []) as PreviewRow[];
+  const previewCount = Number(preview?.generated ?? (Array.isArray(preview?.bills) ? preview.bills.length : preview?.bills) ?? rows.length);
+  const previewTotal = Number(preview?.totalBilled ?? preview?.total ?? 0);
 
   return (
     <Modal
@@ -702,10 +800,30 @@ function GenerateBillsForm({
         water charges, parking, late fees. Change them under Settings to change what is billed.
       </Alert>
 
+      <Field label="Cycle for this run">
+        <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+          {CYCLES.map((item) => (
+            <Button
+              key={item.id}
+              type="button"
+              size="sm"
+              variant={runCycle === item.id ? 'primary' : 'default'}
+              onClick={() => {
+                setRunCycle(item.id);
+                setPeriod(cyclePeriods(timezone, item.id)[0] ?? currentPeriod(timezone));
+                setPreview(null);
+              }}
+            >
+              {item.label}
+            </Button>
+          ))}
+        </div>
+      </Field>
+
       <div className="form-row">
         <Field label="Billing period" required>
           <Select value={period} onChange={(e) => { setPeriod(e.target.value); setPreview(null); }}>
-            {periodOptions(timezone).map((p) => (
+            {cyclePeriods(timezone, runCycle).map((p) => (
               <option key={p} value={p}>
                 {formatPeriod(p)}
               </option>
@@ -745,8 +863,8 @@ function GenerateBillsForm({
         <div className="mt">
           <Alert tone="success">
             Preview only — nothing has been saved. This would raise{' '}
-            <b>{number(preview.bills ?? rows.length)}</b> bills totalling{' '}
-            <b>{money(Number(preview.total ?? 0))}</b>.
+            <b>{number(previewCount)}</b> bills totalling{' '}
+            <b>{money(previewTotal)}</b>.
           </Alert>
           {rows.length > 0 ? (
             <div style={{ maxHeight: 240, overflowY: 'auto' }}>

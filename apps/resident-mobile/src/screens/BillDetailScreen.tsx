@@ -10,9 +10,9 @@
  */
 
 import React, { useCallback, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { Alert, Button, Card, KV, Loading, Screen, StatusChip, colors } from '../components/ui.tsx';
+import { Alert, Button, Card, Field, KV, Loading, Screen, StatusChip, colors } from '../components/ui.tsx';
 import { api, ApiError } from '../lib/api.ts';
 import { formatDateTime, formatMoney, formatDate } from '../lib/format.ts';
 import { useSession } from '../lib/session.tsx';
@@ -38,6 +38,14 @@ export function BillDetailScreen({ route }: Props) {
   const [order, setOrder] = useState<PaymentOrder | null>(null);
   const [paymentId, setPaymentId] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<VerifyResult | null>(null);
+  const [methods, setMethods] = useState<string[]>(['UPI', 'QR', 'ONLINE', 'CASH', 'CHEQUE']);
+  const [upiVpa, setUpiVpa] = useState<string | null>(null);
+  const [mode, setMode] = useState<string | null>(null);
+  const [reference, setReference] = useState('');
+  const [chequeNumber, setChequeNumber] = useState('');
+  const [bankName, setBankName] = useState('');
+  const [qr, setQr] = useState<{ dataUrl: string; uri: string } | null>(null);
+  const [claimNote, setClaimNote] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -51,7 +59,47 @@ export function BillDetailScreen({ route }: Props) {
 
   React.useEffect(() => {
     void load();
+    void api.get<{ methods?: string[]; upiVpa?: string | null; onlineEnabled?: boolean }>('/payments/options').then((options) => {
+      const next = (options.methods ?? []).filter((method) => method !== 'ONLINE' || options.onlineEnabled !== false);
+      if (next.length) setMethods(next);
+      setUpiVpa(options.upiVpa ?? null);
+    }).catch(() => undefined);
   }, [load]);
+
+  const submitClaim = async (claimMode: string) => {
+    if (!bill) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.post('/payments/claim', {
+        billId: bill._id,
+        mode: claimMode,
+        referenceNumber: reference.trim() || undefined,
+        chequeNumber: chequeNumber.trim() || undefined,
+        bankName: bankName.trim() || undefined,
+        clientRequestId: clientRequestId(),
+      });
+      setClaimNote('Submitted. The office will confirm this before it is applied to the bill.');
+      setStage('done');
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not submit the payment.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const showQr = async () => {
+    if (!bill) return;
+    setBusy(true);
+    setError(null);
+    try {
+      setQr(await api.get<{ dataUrl: string; uri: string }>('/payments/upi-qr', { billId: bill._id }));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not build the QR.');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const startPayment = async () => {
     if (!bill) return;
@@ -66,6 +114,8 @@ export function BillDetailScreen({ route }: Props) {
       setPaymentId(result.payment._id);
       setOrder(result.order);
       setStage('checkout');
+      const checkoutUrl = typeof result.order.checkoutUrl === 'string' ? result.order.checkoutUrl : '';
+      if (checkoutUrl) await Linking.openURL(checkoutUrl);
       await load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not start the payment.');
@@ -79,6 +129,13 @@ export function BillDetailScreen({ route }: Props) {
     setBusy(true);
     setError(null);
     try {
+      if (order.checkoutUrl && !order.mockPaymentId) {
+        const result = await api.post<VerifyResult>(`/payments/${paymentId}/sync`, {});
+        setReceipt(result);
+        setStage('done');
+        await load();
+        return;
+      }
       const result = await api.post<VerifyResult>('/payments/verify', {
         paymentId,
         gatewayOrderId: order.orderId,
@@ -159,14 +216,49 @@ export function BillDetailScreen({ route }: Props) {
                   ? 'Development mock gateway — complete the signature check to capture.'
                   : 'Your payment sheet will open. Come back here once you are done.'}
               </Text>
-              {order.mockPaymentId ? (
-                <Button label={`Pay ${formatMoney(order.amount ?? due, currency)}`} onPress={() => void completePayment()} loading={busy} style={{ marginTop: 8 }} />
+              {order.mockPaymentId || order.checkoutUrl ? (
+                <Button label={order.checkoutUrl ? 'I’ve paid' : `Pay ${formatMoney(order.amount ?? due, currency)}`} onPress={() => void completePayment()} loading={busy} style={{ marginTop: 8 }} />
               ) : null}
             </Card>
           ) : null}
 
+          {claimNote ? <Alert tone="success">{claimNote}</Alert> : null}
+
           {canPay && stage === 'idle' ? (
-            <Button label={`Pay ${formatMoney(due, currency)}`} onPress={() => void startPayment()} loading={busy} />
+            <Card>
+              <Text style={styles.payTitle}>Pay {formatMoney(due, currency)}</Text>
+              <View style={styles.methods}>
+                {methods.map((method) => (
+                  <Pressable key={method} onPress={() => setMode(method)} style={[styles.method, mode === method && styles.methodOn]}>
+                    <Text style={[styles.methodLabel, mode === method && { color: '#fff' }]}>{method === 'QR' ? 'QR' : method[0] + method.slice(1).toLowerCase()}</Text>
+                  </Pressable>
+                ))}
+              </View>
+              {mode === 'UPI' ? <Text style={styles.payHint}>Pay{upiVpa ? ` ${upiVpa}` : ' the society UPI ID'}, then enter the UTR.</Text> : null}
+              {mode === 'QR' ? (
+                <View style={{ alignItems: 'center', gap: 8 }}>
+                  {qr?.dataUrl ? <Image source={{ uri: qr.dataUrl }} style={{ width: 220, height: 220, maxWidth: '100%' }} /> : (
+                    <Button label="Show QR" variant="secondary" onPress={() => void showQr()} loading={busy} />
+                  )}
+                </View>
+              ) : null}
+              {mode === 'CHEQUE' ? (
+                <>
+                  <Field label="Cheque number" value={chequeNumber} onChangeText={setChequeNumber} />
+                  <Field label="Bank" value={bankName} onChangeText={setBankName} />
+                </>
+              ) : null}
+              {mode && mode !== 'ONLINE' && mode !== 'CASH' ? (
+                <Field label="UTR or reference" value={reference} onChangeText={setReference} />
+              ) : null}
+              {mode === 'ONLINE' ? (
+                <Button label="Pay online" onPress={() => void startPayment()} loading={busy} style={{ marginTop: 8 }} />
+              ) : mode ? (
+                <Button label="Submit for confirmation" onPress={() => void submitClaim(mode)} loading={busy} style={{ marginTop: 8 }} />
+              ) : (
+                <Text style={styles.payHint}>Choose UPI, QR, online, cash or cheque.</Text>
+              )}
+            </Card>
           ) : null}
 
           <Pressable
@@ -201,4 +293,8 @@ const styles = StyleSheet.create({
   itemAmount: { fontSize: 13.5, color: colors.textMuted, fontWeight: '600' },
   payTitle: { fontSize: 15, fontWeight: 600, color: colors.text, marginBottom: 8 },
   payHint: { fontSize: 12.5, color: colors.textMuted, marginTop: 8, lineHeight: 18 },
+  methods: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 8 },
+  method: { borderWidth: 1, borderColor: colors.borderStrong, borderRadius: 999, paddingVertical: 8, paddingHorizontal: 12, backgroundColor: colors.surface },
+  methodOn: { backgroundColor: colors.brand, borderColor: colors.brand },
+  methodLabel: { fontSize: 13, fontWeight: '700', color: colors.textMuted },
 });

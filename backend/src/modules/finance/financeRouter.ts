@@ -9,6 +9,9 @@ import {
   verifyPaymentSchema,
   recordOfflinePaymentSchema,
   refundPaymentSchema,
+  claimPaymentSchema,
+  gatewaySettingsSchema,
+  billingPeriodSchema,
   createLedgerSchema,
   updateLedgerSchema,
   createJournalEntrySchema,
@@ -113,7 +116,7 @@ const billListQuery = z.object({
   sortBy: z.enum(['dueDate', 'period', 'totalAmount', 'dueAmount', 'createdAt', 'invoiceNumber']).optional(),
   sortDir: z.enum(['asc', 'desc']).optional(),
   status: z.string().trim().max(40).optional(),
-  period: z.string().trim().regex(/^\d{4}-\d{2}$/).optional(),
+  period: billingPeriodSchema.optional(),
   unitId: idSchema.optional(),
   buildingId: idSchema.optional(),
   overdue: z.coerce.boolean().optional(),
@@ -173,7 +176,7 @@ billsRouter.get(
   authenticate({ clientScopes: ['console'] }),
   requireModule('maintenanceBilling' as ModuleKey),
   requirePermission('bill:view'),
-  validate(z.object({ period: z.string().trim().regex(/^\d{4}-\d{2}$/).optional() }), 'query'),
+  validate(z.object({ period: billingPeriodSchema.optional() }), 'query'),
   asyncHandler(async (req, res) => {
     const period = (req.query as Record<string, unknown>).period as string | undefined;
     return ok(res, await billing.billingSummary(billingCtx(req), period), 'Billing summary');
@@ -289,7 +292,7 @@ billsRouter.post(
   authenticate({ clientScopes: ['console'] }),
   requireModule('maintenanceBilling' as ModuleKey),
   requirePermission('bill:update', 'bill:generate'),
-  validate(z.object({ period: z.string().trim().regex(/^\d{4}-\d{2}$/).optional() }), 'body'),
+  validate(z.object({ period: billingPeriodSchema.optional() }), 'body'),
   asyncHandler(async (req, res) => {
     const period = (req.body as { period?: string }).period;
     return ok(res, await billing.applyLateFees(billingCtx(req), { period }), 'Late fees applied');
@@ -617,6 +620,64 @@ paymentsRouter.get(
  * The receipt as a PDF (§59) — the document a resident shows as proof of payment.
  * Served at the published `/{id}/receipt` path and at a `.pdf` alias (see `invoicePdfFlow`).
  */
+/** What a resident can pay with, and the UPI ID the QR encodes. No gateway secret is returned. */
+paymentsRouter.get(
+  '/options',
+  authenticate({ clientScopes: ['resident', 'console'] }),
+  requireModule('payments' as ModuleKey),
+  requirePermission('payment:view', 'payment:create'),
+  asyncHandler(async (req, res) => ok(res, await payments.paymentOptions(paymentsCtx(req)), 'Payment options')),
+);
+
+paymentsRouter.get(
+  '/upi-qr',
+  authenticate({ clientScopes: ['resident', 'console'] }),
+  requireModule('payments' as ModuleKey),
+  requirePermission('payment:view', 'payment:create'),
+  validate(z.object({ billId: idSchema.optional(), amount: z.coerce.number().positive().max(10_000_000).optional() }), 'query'),
+  asyncHandler(async (req, res) => {
+    const q = req.query as { billId?: string; amount?: string };
+    return ok(res, await payments.upiQr(paymentsCtx(req), {
+      billId: q.billId,
+      amount: q.amount === undefined ? undefined : Number(q.amount),
+    }), 'UPI QR');
+  }),
+);
+
+/** Resident UPI / QR / cash / cheque. Stays pending until the office confirms it. */
+paymentsRouter.post(
+  '/claim',
+  authenticate({ clientScopes: ['resident'] }),
+  requireModule('payments' as ModuleKey),
+  requirePermission('payment:create'),
+  validate(claimPaymentSchema),
+  asyncHandler(async (req, res) => {
+    const body = req.body as z.infer<typeof claimPaymentSchema>;
+    const payment = await payments.claimPayment(paymentsCtx(req), body);
+    return created(res, { payment: serialise(payment) }, 'Payment submitted. The office will confirm it before it is applied to the bill.');
+  }),
+);
+
+paymentsRouter.get(
+  '/gateway',
+  authenticate({ clientScopes: ['console'] }),
+  requireModule('payments' as ModuleKey),
+  requirePermission('payment:view', 'setting:view'),
+  asyncHandler(async (req, res) => ok(res, await payments.gatewaySettingsView(paymentsCtx(req)), 'Payment gateway')),
+);
+
+paymentsRouter.put(
+  '/gateway',
+  authenticate({ clientScopes: ['console'] }),
+  requireModule('payments' as ModuleKey),
+  requirePermission('payment:update', 'setting:update', 'society:update'),
+  validate(gatewaySettingsSchema),
+  asyncHandler(async (req, res) => {
+    const saved = await payments.saveGatewaySettings(paymentsCtx(req), req.body as z.infer<typeof gatewaySettingsSchema>);
+    return ok(res, saved, 'Payment gateway updated');
+  }),
+);
+
 const receiptPdfFlow: RequestHandler[] = [
   authenticate({ clientScopes: ['resident', 'console'] }),
   requireModule('payments' as ModuleKey),
@@ -665,6 +726,44 @@ paymentsRouter.get(
       },
       'Fetched successfully',
     );
+  }),
+);
+
+paymentsRouter.post(
+  '/:id/confirm',
+  authenticate({ clientScopes: ['console'] }),
+  requireModule('payments' as ModuleKey),
+  requirePermission('payment:record', 'payment:update'),
+  validate(z.object({ id: idSchema }), 'params'),
+  validate(z.object({ note: z.string().trim().max(300).optional() })),
+  asyncHandler(async (req, res) => {
+    const result = await payments.confirmClaim(paymentsCtx(req), String(req.params.id), (req.body as { note?: string }).note);
+    return ok(res, { payment: serialise(result.payment), receipt: result.receipt ?? null, alreadyProcessed: Boolean(result.alreadyProcessed) }, 'Payment confirmed');
+  }),
+);
+
+paymentsRouter.post(
+  '/:id/reject',
+  authenticate({ clientScopes: ['console'] }),
+  requireModule('payments' as ModuleKey),
+  requirePermission('payment:record', 'payment:update'),
+  validate(z.object({ id: idSchema }), 'params'),
+  validate(z.object({ reason: z.string().trim().min(3).max(300) })),
+  asyncHandler(async (req, res) => {
+    const payment = await payments.rejectClaim(paymentsCtx(req), String(req.params.id), String((req.body as { reason: string }).reason));
+    return ok(res, { payment: serialise(payment) }, 'Payment claim rejected');
+  }),
+);
+
+paymentsRouter.post(
+  '/:id/sync',
+  authenticate({ clientScopes: ['resident', 'console'] }),
+  requireModule('payments' as ModuleKey),
+  requirePermission('payment:create', 'payment:view'),
+  validate(z.object({ id: idSchema }), 'params'),
+  asyncHandler(async (req, res) => {
+    const result = await payments.syncGatewayPayment(paymentsCtx(req), String(req.params.id));
+    return ok(res, { payment: serialise(result.payment), receipt: result.receipt ?? null, alreadyProcessed: Boolean(result.alreadyProcessed) }, 'Payment checked with the gateway');
   }),
 );
 

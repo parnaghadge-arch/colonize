@@ -22,6 +22,7 @@ import {
 } from '../components/ui.tsx';
 import { day, dateTime, label, money } from '../lib/format.ts';
 import { useSession } from '../lib/session.tsx';
+import { GatewayPanel } from '../components/GatewayPanel.tsx';
 import type { Payment } from '../lib/types.ts';
 
 const MODES = ['ONLINE', 'UPI', 'CARD', 'NETBANKING', 'CASH', 'CHEQUE', 'DD', 'BANK_TRANSFER', 'WALLET'];
@@ -94,6 +95,10 @@ export function PaymentsPage() {
     <div className="stack">
       {payments.error ? <ErrorAlert error={payments.error} /> : null}
       {summary.error ? <ErrorAlert error={summary.error} /> : null}
+
+      <GatewayPanel />
+
+      <PendingClaims onChanged={() => { payments.reload(); summary.reload(); }} />
 
       <div className="tiles">
         <Tile label="Transactions" value={number(s?.transactions)} tone="brand" />
@@ -441,5 +446,68 @@ function RefundForm({ payment, onClose, onDone }: { payment: Payment; onClose: (
         <Textarea value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Booking cancelled within the refund window" required />
       </Field>
     </Modal>
+  );
+}
+
+function PendingClaims({ onChanged }: { onChanged: () => void }) {
+  const { can } = useSession();
+  const toast = useToast();
+  const claims = useList<Payment>('/payments', { status: 'PENDING', limit: 20, sort: 'createdAt', dir: 'desc' }, []);
+  const [busy, setBusy] = useState<string | null>(null);
+  const canConfirm = can('payment:record') || can('payment:update');
+  const rows = claims.page.items.filter((row) => row.status === 'PENDING');
+  if (!rows.length && !claims.loading) return null;
+
+  async function confirm(id: string) {
+    setBusy(id);
+    try {
+      await api.post(`/payments/${id}/confirm`, {});
+      toast.success('Payment confirmed and applied to the bill');
+      claims.reload();
+      onChanged();
+    } catch (err) {
+      toast.error(err);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function reject(id: string) {
+    const reason = window.prompt('Why is this payment being rejected?');
+    if (!reason || reason.trim().length < 3) return;
+    setBusy(id);
+    try {
+      await api.post(`/payments/${id}/reject`, { reason: reason.trim() });
+      toast.success('Payment claim rejected');
+      claims.reload();
+      onChanged();
+    } catch (err) {
+      toast.error(err);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <Card title="Waiting for confirmation" subtitle="UPI, QR, cash and cheque submitted by residents. Nothing is applied until you confirm.">
+      {claims.loading ? <Loading /> : (
+        <div className="stack">
+          {rows.map((row) => (
+            <div key={row._id} className="row" style={{ justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+              <div>
+                <b>{money(row.amount)}</b> · {label(String((row as Payment & { metadata?: { claim?: { mode?: string } } }).metadata?.claim?.mode ?? row.mode ?? 'payment'))}
+                <div className="small faint">{(row as Payment & { referenceNote?: string | null }).referenceNote || row.referenceNumber || row.unitId}</div>
+              </div>
+              {canConfirm ? (
+                <div className="row" style={{ gap: 8 }}>
+                  <Button size="sm" variant="primary" busy={busy === row._id} onClick={() => void confirm(row._id)}>Confirm</Button>
+                  <Button size="sm" busy={busy === row._id} onClick={() => void reject(row._id)}>Reject</Button>
+                </div>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
   );
 }
