@@ -30,7 +30,6 @@
     "plugins": [
       "expo-secure-store",
       "expo-dev-client",
-      "expo-status-bar",
       [
         "expo-splash-screen",
         {
