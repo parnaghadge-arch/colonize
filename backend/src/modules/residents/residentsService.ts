@@ -3,6 +3,7 @@ import type { Document, TenantDatabase } from '../../db/drivers/types.js';
 import { newId } from '../../db/ids.js';
 import { ApiError } from '../../utils/errors.js';
 import { hashPassword } from '../../services/crypto.js';
+import { RESIDENT_INITIAL_PASSWORD } from './residentPassword.js';
 import { upsertMembership } from '../../services/identityDirectory.js';
 import { databases } from '../../db/manager.js';
 import { refreshUnitCounters } from '../structure/structureService.js';
@@ -208,7 +209,15 @@ export async function ensureResidentUser(
   if (user) {
     const roles = Array.from(new Set([...((user.roles as string[]) ?? []), role]));
     const patch: Document = { roles, updatedAt: new Date() };
-    if (input.password) patch.passwordHash = await hashPassword(input.password);
+    // An explicit password (import/seed) replaces the hash and must be changed on next sign-in.
+    // A resident who already has a password is left alone unless one is supplied.
+    if (input.password) {
+      patch.passwordHash = await hashPassword(input.password);
+      patch.mustChangePassword = true;
+    } else if (!user.passwordHash) {
+      patch.passwordHash = await hashPassword(RESIDENT_INITIAL_PASSWORD);
+      patch.mustChangePassword = true;
+    }
     if (!user.fullName) patch.fullName = input.fullName;
     if (input.email && !user.email) patch.email = input.email;
     if (input.phone && !user.phone) patch.phone = input.phone;
@@ -221,12 +230,12 @@ export async function ensureResidentUser(
       fullName: input.fullName,
       phone: input.phone,
       email: input.email,
-      passwordHash: input.password ? await hashPassword(input.password) : null,
+      passwordHash: await hashPassword(input.password?.trim() || RESIDENT_INITIAL_PASSWORD),
       roles: [role],
       status: 'ACTIVE',
       isActive: true,
       isVerified: false,
-      mustChangePassword: false,
+      mustChangePassword: true,
       avatarUrl: null,
       gender: null,
       dateOfBirth: null,
@@ -285,6 +294,67 @@ export async function ensureResidentUser(
   });
 
   return user;
+}
+
+/**
+ * Admin recovery when a resident forgot their password.
+ * Sets a temporary password (default `Resident@123`) and forces a change on the next sign-in.
+ * Existing sessions are revoked so the old password stops working immediately.
+ */
+export async function resetResidentPassword(
+  ctx: ResidentsContext,
+  residentId: string,
+  password: string = RESIDENT_INITIAL_PASSWORD,
+): Promise<{ userId: string; mustChangePassword: true }> {
+  const resident = await ctx.db.collection('residents').findOne({ societyId: ctx.societyId, _id: residentId });
+  if (!resident) throw ApiError.notFound('Resident');
+
+  const phone = resident.phone ? String(resident.phone) : null;
+  const email = resident.email ? String(resident.email) : null;
+  let user = resident.userId ? await ctx.db.collection('users').findById(String(resident.userId)) : null;
+  if (!user && (phone || email)) {
+    user = await ctx.db.collection('users').findOne({
+      societyId: ctx.societyId,
+      ...(phone ? { phone } : { email }),
+    });
+  }
+  if (!user) {
+    if (!phone && !email) throw ApiError.badRequest('This resident has no phone or email, so there is no login to reset');
+    user = await ensureResidentUser(ctx, {
+      residentId: String(resident._id),
+      unitId: String(resident.unitId),
+      fullName: String(resident.fullName ?? ''),
+      phone,
+      email,
+      kind: (resident.kind ?? 'OWNER') as MemberKind,
+      isPrimary: Boolean(resident.isPrimary),
+      password,
+    });
+  }
+
+  const passwordHash = await hashPassword(password);
+  await ctx.db.collection('users').updateOne(
+    { _id: user._id },
+    {
+      $set: {
+        passwordHash,
+        mustChangePassword: true,
+        failedLoginAttempts: 0,
+        lockedUntil: null,
+        status: user.status === 'LOCKED' ? 'ACTIVE' : user.status ?? 'ACTIVE',
+        updatedBy: ctx.actorId,
+      },
+    },
+  );
+  if (!resident.userId) {
+    await ctx.db.collection('residents').updateOne({ _id: resident._id }, { $set: { userId: user._id } });
+  }
+  await ctx.db.collection('sessions').updateMany(
+    { societyId: ctx.societyId, userId: user._id, isActive: true },
+    { $set: { isActive: false, revokedAt: new Date(), revokeReason: 'PASSWORD_RESET_BY_ADMIN' } },
+  );
+
+  return { userId: String(user._id), mustChangePassword: true };
 }
 
 export async function unitIdsForUser(ctx: ResidentsContext, userId: string): Promise<string[]> {

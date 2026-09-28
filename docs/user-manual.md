@@ -345,12 +345,15 @@ already exist are rejected and nothing is written.
 Owners, tenants and family members, always scoped to units of this society.
 
 - **Add resident** (topbar): name, phone, email, kind (Owner/Tenant/Family/
-  Company), unit (hierarchy picker), move-in date. The resident becomes the
-  unit's primary contact and can sign in to the resident app by phone (OTP)
-  from then on.
+  Company), unit (hierarchy picker), move-in date. They can sign in to the
+  resident app with that email or mobile. The first password is `Resident@123`
+  and must be changed before the rest of the app opens.
 - **Edit** (from the resident's detail card): name, phone, email, kind, unit,
   move-in date, occupation, primary-contact flag. Saving re-syncs the login
   directory, so a changed phone/email is the new sign-in identifier.
+- **Reset password** (from the detail card): sets a temporary password
+  (default `Resident@123`) and signs them out. They must choose a new password
+  the next time they sign in.
 - **Remove** (from the detail card): soft delete — the audit trail keeps the
   person, their sign-in stops working, and they no longer resolve to a unit.
   Family members' derived sign-ins stop too.
@@ -538,10 +541,12 @@ society's console (name, email, phone, roles, status, last sign-in, and a
 
 ## 6. Resident app
 
-**Sign-in:** phone number + OTP (primary), or password when set. A phone
-number that belongs to several societies is asked which one to open. The app
-then shows six bottom tabs: **Home · Complaints · Bills · Amenities ·
-Visitors · Profile**.
+**Sign-in:** email or mobile, plus password. The first password for every
+resident is `Resident@123`. After that sign-in the app shows only the
+change-password screen until they replace it. OTP sign-in is still available.
+A phone number that belongs to several societies is asked which one to open.
+The app then shows six bottom tabs: **Home · Complaints · Bills · Amenities ·
+Visitors · Profile**. The back control and the tab menu stay on every screen.
 
 ### 6.1 Home
 
@@ -579,9 +584,7 @@ checked out / expired / revoked).
 ### 6.6 Profile
 
 Account details, the **society card** (logo, name, timezone, currency),
-unit(s) and family members, **sessions** (active devices, revoke), **app PIN**
-(enroll/change/remove), password management (set/change), push token
-management, and **sign out**.
+the linked unit, **change password**, and **sign out**.
 
 ### 6.7 Family members
 

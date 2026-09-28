@@ -19,6 +19,7 @@ import {
 import { AuditService, logSystemAudit } from '../../services/audit.js';
 import { invalidateSociety, permissionCache } from '../../services/cache.js';
 import { findByIdentifier, upsertMembership, type DirectoryMembership } from '../../services/identityDirectory.js';
+import { isResidentRole, RESIDENT_INITIAL_PASSWORD } from '../residents/residentPassword.js';
 import { NotificationService } from '../../services/notifications/index.js';
 import type { Document, TenantDatabase } from '../../db/drivers/types.js';
 import type { RequestContext } from '../../middleware/context.js';
@@ -250,6 +251,7 @@ export async function buildAuthenticatedUser(
     avatarUrl: user.avatarUrl ? String(user.avatarUrl) : null,
     status: String(user.status ?? 'ACTIVE'),
     preferredSocietyId: societyId,
+    mustChangePassword: Boolean(user.mustChangePassword),
   };
 }
 
@@ -335,11 +337,29 @@ export async function loginWithPassword(
       const user = await db.collection('users').findById(membership.userId);
       if (!user) continue;
       if (!user.passwordHash) {
+        // Residents created before the default password existed can still sign in with it.
+        // The hash is stored here so the forced change-password screen can verify it.
+        if (isResidentRole(user.roles) && password === RESIDENT_INITIAL_PASSWORD) {
+          const passwordHash = await hashPassword(RESIDENT_INITIAL_PASSWORD);
+          await db.collection('users').updateOne(
+            { _id: user._id },
+            { $set: { passwordHash, mustChangePassword: true } },
+          );
+          if (user.status !== 'ACTIVE') {
+            pendingWithCorrectPassword = membership.societyName;
+            continue;
+          }
+          verified.push(membership);
+          continue;
+        }
         accountWithoutPassword = membership.societyName;
         continue;
       }
       const okPassword = await verifyPassword(password, String(user.passwordHash));
       if (!okPassword) continue;
+      if (isResidentRole(user.roles) && password === RESIDENT_INITIAL_PASSWORD) {
+        await db.collection('users').updateOne({ _id: user._id }, { $set: { mustChangePassword: true } });
+      }
       if (user.status !== 'ACTIVE') {
         pendingWithCorrectPassword = membership.societyName;
         continue;
@@ -481,13 +501,27 @@ async function successOutcome(
   method: 'OTP' | 'PASSWORD',
 ): Promise<LoginOutcome> {
   const db = await tenantFor(membership);
-  const user = await db.collection('users').findById(membership.userId);
+  let user = await db.collection('users').findById(membership.userId);
   if (!user) throw ApiError.unauthenticated('Account no longer exists', 'TOKEN_INVALID');
   if (user.status === 'LOCKED' && user.lockedUntil && new Date(user.lockedUntil as string | Date).getTime() > Date.now()) {
     throw new ApiError('This account is temporarily locked. Try again in a few minutes.', 'ACCOUNT_LOCKED');
   }
   if (user.status !== 'ACTIVE') {
     throw new ApiError('This account is not active. Contact your society administrator.', 'ACCOUNT_INACTIVE');
+  }
+
+  // A resident still on the temporary password must change it, whichever way they signed in.
+  if (isResidentRole(user.roles)) {
+    if (!user.passwordHash) {
+      const passwordHash = await hashPassword(RESIDENT_INITIAL_PASSWORD);
+      await db.collection('users').updateOne({ _id: user._id }, { $set: { passwordHash, mustChangePassword: true } });
+      user = { ...user, passwordHash, mustChangePassword: true };
+    } else if (await verifyPassword(RESIDENT_INITIAL_PASSWORD, String(user.passwordHash))) {
+      if (!user.mustChangePassword) {
+        await db.collection('users').updateOne({ _id: user._id }, { $set: { mustChangePassword: true } });
+      }
+      user = { ...user, mustChangePassword: true };
+    }
   }
 
   const session = await issueSession({ db, societyId: membership.societyId, user, device, loginMethod: method });
@@ -766,6 +800,9 @@ export async function changePassword(ctx: RequestContext, currentPassword: strin
     }
   } else if (currentPassword) {
     throw ApiError.badRequest('This account signs in with an OTP. Set a password from the profile screen.');
+  }
+  if (newPassword === currentPassword || newPassword === RESIDENT_INITIAL_PASSWORD) {
+    throw ApiError.badRequest('Choose a new password. The temporary password cannot be kept.');
   }
 
   const passwordHash = await hashPassword(newPassword);

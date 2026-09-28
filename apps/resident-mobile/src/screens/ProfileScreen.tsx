@@ -1,10 +1,11 @@
 /** Profile — who is signed in, which society, and the sign-out action. */
 
 import React, { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 
 import { Alert, Button, Card, KV, Screen, ScreenTitle, SocietyBadge, colors } from '../components/ui.tsx';
 import { useSession } from '../lib/session.tsx';
+import { ChangePasswordForm } from './ChangePasswordScreen.tsx';
 
 export function ProfileScreen() {
   const { who, logout, refresh } = useSession();
@@ -52,12 +53,8 @@ export function ProfileScreen() {
         <KV label="Primary unit" value={who?.membership?.primaryUnitId ? 'Linked' : 'Not linked'} />
       </Card>
 
-      <Card>
-        <KV label="Modules enabled" value={String(who?.enabledModules?.length ?? 0)} />
-        <Text style={styles.modules} numberOfLines={4}>
-          {(who?.enabledModules ?? []).join(', ')}
-        </Text>
-      </Card>
+      <ScreenTitle title="Password" subtitle="Change the password for this account" />
+      <ChangePasswordForm />
 
       <Button label="Refresh profile" variant="secondary" onPress={() => void refresh()} style={{ marginBottom: 10 }} />
       <Button label="Sign out" variant="danger" onPress={() => void signOut()} loading={busy} />
@@ -78,5 +75,4 @@ const styles = StyleSheet.create({
   avatarText: { color: '#fff', fontSize: 28, fontWeight: '800' },
   name: { fontSize: 17, fontWeight: '700', color: colors.text },
   roles: { fontSize: 13, color: colors.textMuted, marginTop: 4 },
-  modules: { fontSize: 12.5, color: colors.textMuted, marginTop: 6, lineHeight: 18 },
 });

@@ -6,8 +6,8 @@
   "main": "index.ts",
   "scripts": {
     "predev": "npm run build -w @colonize/shared --if-present",
-    "dev": "expo start --go",
-    "start": "expo start --go",
+    "dev": "expo start --go --port 8082",
+    "start": "expo start --go --port 8082",
     "web": "expo start --web",
     "android": "expo run:android",
     "ios": "expo run:ios",

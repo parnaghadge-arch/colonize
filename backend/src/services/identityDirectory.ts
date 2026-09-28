@@ -50,7 +50,13 @@ export async function findByEmail(email: string): Promise<DirectoryEntry | null>
 export async function findByIdentifier(identifier: string): Promise<DirectoryEntry | null> {
   const value = identifier.trim();
   if (value.includes('@')) return findByEmail(value);
-  return findByPhone(value.replace(/[^\d+]/g, ''));
+  const compact = value.replace(/[^\d+]/g, '');
+  const normalised = normalise(compact);
+  if (normalised !== compact) {
+    const byNormalised = await findByPhone(normalised);
+    if (byNormalised) return byNormalised;
+  }
+  return findByPhone(compact);
 }
 
 export interface UpsertInput {

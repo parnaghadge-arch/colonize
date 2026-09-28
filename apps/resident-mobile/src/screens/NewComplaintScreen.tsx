@@ -39,7 +39,7 @@ export function NewComplaintScreen() {
     setError(null);
     try {
       const unitId = who?.membership?.primaryUnitId ?? null;
-      const created = await api.post<{ _id?: string; complaint?: { _id: string } }>('/complaints', {
+      const created = await api.post<{ _id?: string; id?: string; complaint?: { _id?: string; id?: string } }>('/complaints', {
         category,
         title: title.trim(),
         description: description.trim(),
@@ -48,8 +48,8 @@ export function NewComplaintScreen() {
         ...(locationType === 'UNIT' && unitId ? { unitId } : {}),
         ...(locationText.trim() ? { locationText: locationText.trim() } : {}),
       });
-      const complaintId = created.complaint?._id ?? created._id;
-      if (!complaintId) throw new Error('The server did not return the new complaint id');
+      const complaintId = created.complaint?._id ?? created.complaint?.id ?? created._id ?? created.id;
+      if (!complaintId) throw new Error('The server did not return the new complaint.');
       navigation.replace('ComplaintDetail', { id: complaintId });
     } catch (err) {
       if (err instanceof ApiError) {
@@ -58,7 +58,7 @@ export function NewComplaintScreen() {
         setFieldErrors(mapped);
         setError(err.message);
       } else {
-        setError('Could not raise the complaint.');
+        setError(err instanceof Error ? err.message : 'Could not raise the complaint.');
       }
     } finally {
       setBusy(false);

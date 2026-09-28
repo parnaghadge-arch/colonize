@@ -160,7 +160,9 @@ export function HomeScreen({ navigation }: Props) {
           </Card>
 
           <Card style={{ alignItems: 'center', gap: 8 }}>
-            <View style={styles.avatar}>{initials(who?.user?.fullName)}</View>
+            <View style={styles.avatar}>
+              <Text style={styles.avatarText}>{initials(who?.user?.fullName)}</Text>
+            </View>
             <Text style={{ fontWeight: 600, color: colors.text }}>{who?.user?.fullName}</Text>
             <Text style={styles.muted}>
               {who?.user?.phone} {who?.user?.email ? `· ${who.user.email}` : ''}
@@ -255,6 +257,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  avatarText: { color: '#fff', fontSize: 18, fontWeight: '800' },
   // (avatar text style inlined via Text props)
   complaintDivider: { height: 10 },
 });

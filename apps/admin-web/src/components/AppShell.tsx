@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState } from 'react';
 import { useSession } from '../lib/session.tsx';
 import { Button, ErrorAlert, Modal } from './ui.tsx';
 import { LinkHomeForm } from './LinkHomeForm.tsx';
@@ -232,7 +232,6 @@ export function AppShell() {
                 </Button>
               </div>
             ) : null}
-            <PlanBadge />
             <Button
               size="sm"
               variant="ghost"
@@ -273,12 +272,4 @@ export function AppShell() {
   );
 }
 
-function PlanBadge(): ReactNode {
-  const { who } = useSession();
-  const count = who?.enabledModules?.length ?? 0;
-  return (
-    <span className="pill pill--brand" title="Modules enabled by this society's subscription plan">
-      {count} modules enabled
-    </span>
-  );
-}
+

@@ -10,6 +10,7 @@ import {
   updateResidentSchema,
   updateVehicleSchema,
   updateParkingSlotSchema,
+  passwordSchema,
 } from '@colonize/shared/validation';
 import { buildCrudRouter } from '../_shared/crud.js';
 import { authenticate, requireTenantContext } from '../../middleware/authenticate.js';
@@ -20,6 +21,7 @@ import { ok, created } from '../../utils/response.js';
 import { ApiError } from '../../utils/errors.js';
 import { newId } from '../../db/ids.js';
 import { RESIDENT_CSV_ALIASES } from './residentsService.js';
+import { RESIDENT_INITIAL_PASSWORD } from './residentPassword.js';
 import * as residentsService from './residentsService.js';
 import { refreshUnitCounters } from '../structure/structureService.js';
 
@@ -199,6 +201,23 @@ residentsRouter.post(
       req.body as never,
     );
     return ok(res, result, 'Resident moved out — their login no longer has access to this flat');
+  }),
+);
+
+residentsRouter.post(
+  '/:id/reset-password',
+  authenticate(),
+  requirePermission('resident:update', 'resident:manage'),
+  validate(z.object({ password: passwordSchema.optional() })),
+  asyncHandler(async (req, res) => {
+    const ctx = requireTenantContext(req);
+    const body = req.body as { password?: string };
+    const result = await residentsService.resetResidentPassword(
+      { db: ctx.db, societyId: ctx.society.id, actorId: ctx.principal.userId, actorName: ctx.principal.fullName },
+      String(req.params.id),
+      body.password ?? RESIDENT_INITIAL_PASSWORD,
+    );
+    return ok(res, result, 'Password reset. The resident must choose a new one the next time they sign in.');
   }),
 );
 

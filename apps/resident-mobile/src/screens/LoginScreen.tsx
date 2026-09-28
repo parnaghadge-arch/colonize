@@ -130,7 +130,15 @@ export function LoginScreen() {
 
           {mode === 'password' ? (
             <>
-              <Field label="Email or phone" value={identifier} onChangeText={setIdentifier} placeholder="you@society.com or +91…" keyboardType="phone-pad" />
+              <Field
+                label="Email or phone"
+                value={identifier}
+                onChangeText={setIdentifier}
+                placeholder="you@society.com or 9876543210"
+                autoCapitalize="none"
+                keyboardType="email-address"
+                hint="Sign in with the email or mobile on your resident record. The first password is Resident@123."
+              />
               <Field label="Password" value={password} onChangeText={setPassword} placeholder="Your password" secureTextEntry />
               <Button label="Sign in" onPress={() => void submitPassword()} loading={busy} />
             </>

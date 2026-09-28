@@ -611,8 +611,7 @@ async function seedResidents(
         kind: a.kind,
         isPrimary: a.isPrimary,
         moveInDate: new Date(Date.now() - (a.index % 720) * 86_400_000),
-        // Password login is a convenience for the demo; OTP remains the primary resident flow.
-        password: a.isPrimary ? 'Resident@123' : null,
+        // Login is created by ensureResidentUser. First password is Resident@123 and must be changed.
         createLogin: true,
       });
       residents += 1;

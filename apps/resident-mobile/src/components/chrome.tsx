@@ -105,8 +105,8 @@ export function SignedInChrome({ children }: { children: React.ReactNode }) {
             <Text style={[styles.backLabel, !canBack && activeTab === 'Home' && styles.backMuted]}>‹ Back</Text>
           </Pressable>
         </View>
-        <View style={styles.body}>{children}</View>
-        <View style={[styles.menu, { paddingBottom: Math.max(insets.bottom, 6) }]}>
+        <View style={styles.body} pointerEvents="box-none">{children}</View>
+        <View style={[styles.menu, { paddingBottom: Math.max(insets.bottom, 6) }]} pointerEvents="auto">
           {TABS.map((tab) => {
             const active = activeTab === tab.name;
             return (
@@ -134,6 +134,8 @@ const styles = StyleSheet.create({
   shell: { flex: 1, backgroundColor: colors.bg, minHeight: 0 },
   backBar: {
     flexShrink: 0,
+    zIndex: 30,
+    elevation: 30,
     backgroundColor: colors.surface,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
@@ -143,7 +145,7 @@ const styles = StyleSheet.create({
   backBtn: { minHeight: 44, minWidth: 44, justifyContent: 'center', paddingHorizontal: 8, alignSelf: 'flex-start' },
   backLabel: { color: colors.brandDark, fontSize: 16, fontWeight: '700' },
   backMuted: { opacity: 0.35 },
-  body: { flex: 1, minHeight: 0 },
+  body: { flex: 1, minHeight: 0, overflow: 'hidden', zIndex: 0 },
   menu: {
     flexShrink: 0,
     flexDirection: 'row',
@@ -152,6 +154,8 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: colors.border,
     paddingTop: 6,
+    zIndex: 30,
+    elevation: 30,
   },
   tab: { flexGrow: 1, flexBasis: 56, minWidth: 56, minHeight: 48, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 2 },
   tabLabel: { fontSize: 11, color: colors.textFaint, marginTop: 1 },

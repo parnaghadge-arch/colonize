@@ -42,7 +42,7 @@ export function NewVisitorScreen({ navigation }: Props) {
     setBusy(true);
     setError(null);
     try {
-      const created = await api.post<{ _id: string; passId?: string }>('/visitors/pre-approve', {
+      const created = await api.post<{ visitor?: { _id?: string; id?: string } }>('/visitors/pre-approve', {
         visitorName: name.trim(),
         ...(phone.trim() ? { visitorPhone: phone.trim() } : {}),
         visitDate: date,
@@ -55,7 +55,9 @@ export function NewVisitorScreen({ navigation }: Props) {
         ...(notes.trim() ? { notes: notes.trim() } : {}),
         generateQrPass: true,
       });
-      navigation.replace('QrPass', { visitorId: created._id });
+      const visitorId = created.visitor?._id ?? created.visitor?.id;
+      if (!visitorId) throw new Error('The server did not return the new visitor.');
+      navigation.replace('QrPass', { visitorId });
     } catch (err) {
       if (err instanceof ApiError) {
         const mapped: Record<string, string> = {};
@@ -63,7 +65,7 @@ export function NewVisitorScreen({ navigation }: Props) {
         setFieldErrors(mapped);
         setError(err.message);
       } else {
-        setError('Could not create the visit.');
+        setError(err instanceof Error ? err.message : 'Could not create the visit.');
       }
       setBusy(false);
     }
@@ -76,12 +78,12 @@ export function NewVisitorScreen({ navigation }: Props) {
 
       <Card>
         <Field label="Visitor name" value={name} onChangeText={setName} placeholder="Full name" autoCapitalize="words" autoCorrect error={fieldErrors.name} />
-        <Field label="Phone (optional)" value={phone} onChangeText={setPhone} placeholder="+91…" keyboardType="phone-pad" error={fieldErrors.phone} />
+        <Field label="Phone (optional)" value={phone} onChangeText={setPhone} placeholder="+91…" keyboardType="phone-pad" error={fieldErrors.visitorPhone ?? fieldErrors.phone} />
 
-        <Field label="Date" value={date} onChangeText={(t) => setDate(t.slice(0, 10))} keyboardType="default" hint="Use your keyboard: YYYY-MM-DD (e.g. today)." error={fieldErrors.date} />
+        <Field label="Date" value={date} onChangeText={(t) => setDate(t.slice(0, 10))} keyboardType="default" hint="Use your keyboard: YYYY-MM-DD (e.g. today)." error={fieldErrors.visitDate ?? fieldErrors.date} />
         <View style={styles.timeRow}>
           <View style={{ flex: 1 }}>
-            <Field label="Expected arrival" value={arrival} onChangeText={setArrival} placeholder="10:30" error={fieldErrors.arrival} />
+            <Field label="Expected arrival" value={arrival} onChangeText={setArrival} placeholder="10:30" error={fieldErrors.expectedArrival ?? fieldErrors.arrival} />
           </View>
           <View style={{ flex: 1 }}>
             <Field label="Departure (optional)" value={departure} onChangeText={setDeparture} placeholder="13:00" />

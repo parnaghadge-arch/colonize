@@ -58,6 +58,8 @@ export interface AuthenticatedUser {
   avatarUrl?: string | null;
   status: string;
   preferredSocietyId?: string | null;
+  /** True until the account holder replaces a temporary password. */
+  mustChangePassword?: boolean;
 }
 
 export interface SocietyMembership {

@@ -70,7 +70,9 @@ export function AmenitiesScreen({ navigation }: Props) {
           <Pressable key={a._id} onPress={() => navigation.navigate('AmenityDetail', { id: a._id })}>
             <Card>
               <View style={styles.row}>
-                <View style={styles.iconBox}>{TYPE_EMOJI[String(a.type ?? '').toUpperCase()] ?? '📍'}</View>
+                <View style={styles.iconBox}>
+                  <Text style={styles.icon}>{TYPE_EMOJI[String(a.type ?? '').toUpperCase()] ?? '📍'}</Text>
+                </View>
                 <View style={{ flex: 1, gap: 3 }}>
                   <Text style={styles.name}>{a.name}</Text>
                   <Text style={styles.meta} numberOfLines={1}>
@@ -95,6 +97,7 @@ export function AmenitiesScreen({ navigation }: Props) {
 const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   iconBox: { width: 44, height: 44, borderRadius: 12, backgroundColor: colors.brandSoft, alignItems: 'center', justifyContent: 'center' },
+  icon: { fontSize: 22 },
   name: { fontSize: 15, fontWeight: 600, color: colors.text },
   meta: { fontSize: 12.5, color: colors.textMuted },
   fee: { fontSize: 13.5, fontWeight: '700', color: colors.text },

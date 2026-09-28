@@ -14,6 +14,8 @@ export interface WhoAmIUser {
   avatarUrl: string | null;
   roles: string[];
   scope: string;
+  /** True until the temporary first password has been replaced. */
+  mustChangePassword?: boolean;
 }
 
 export interface WhoAmISociety {

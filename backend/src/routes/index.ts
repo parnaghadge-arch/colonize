@@ -168,6 +168,7 @@ apiRouter.get(
         avatarUrl: c.principal.avatarUrl,
         roles: c.principal.roles,
         scope: c.principal.scope,
+        mustChangePassword: Boolean(c.principal.userDoc.mustChangePassword),
       },
       society: c.society
         ? { id: c.society.id, name: c.society.name, slug: c.society.slug, timezone: c.society.timezone, currency: c.society.currency, logoUrl: c.society.logoUrl ?? null }

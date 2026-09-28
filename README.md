@@ -120,8 +120,12 @@ needed.
 
 ```bash
 npm run dev:resident                 # Expo dev server → open http://localhost:8081 in a browser
-npm run dev:security                 # second terminal; its web preview is on :8082
+npm run dev:security                 # second terminal; Metro is pinned to :8082
 ```
+
+The security app also listens on 8082 if you start it from its folder with
+`npx expo start --go` (it reads `RCT_METRO_PORT` from `.env.development`), so it
+does not collide with the resident Metro server on 8081.
 
 > **Web preview says "Cannot reach the Colonize API" / the browser console shows a CORS or
 > `net::ERR_FAILED` line for `localhost:4000`** — first make sure the API process is running:
@@ -279,14 +283,15 @@ passes all local checks (the two remote metadata checks need network access to E
 
 ## Demo logins
 
-Produced by the seed. All credentials come from `SEED_*` environment variables — nothing is
-hard-coded in the application.
+Produced by the seed. Platform and society-admin passwords come from `SEED_*` environment
+variables. Every resident's first password is `Resident@123`; the resident app asks them to
+replace it before anything else opens.
 
 | Role | Identifier | Password |
 | --- | --- | --- |
 | Super admin (platform) | `superadmin@colonize.local` | `Colonize@Super1` |
 | Society admin (Green Valley) | `admin@greenvalley.local` | `GreenValley@1` |
-| Demo resident | `+919800000101` | `Resident@123` (or OTP) |
+| Demo resident | `+919800000101` or `resident1@greenvalley.local` | `Resident@123` (must be changed on first sign-in; OTP also works) |
 | Demo gate guard | `+919800000901` | `Guard@1234` |
 
 **OTP login** — `POST /api/auth/send-otp` with `{ phone, channel: "CONSOLE", purpose: "LOGIN" }`,

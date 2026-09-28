@@ -267,8 +267,27 @@ function ResidentDetail({
   onRemove: () => void;
   closing: boolean;
 }) {
+  const toast = useToast();
   const family = useList<FamilyMember>('/family-members', { residentId: resident._id, limit: 50 }, [resident._id]);
   const vehicles = useList<Vehicle>('/vehicles', { residentId: resident._id, limit: 50 }, [resident._id]);
+  const [password, setPassword] = useState('Resident@123');
+  const [resetting, setResetting] = useState(false);
+  const [resetError, setResetError] = useState<unknown>(null);
+
+  async function resetPassword(e: FormEvent) {
+    e.preventDefault();
+    setResetting(true);
+    setResetError(null);
+    try {
+      await api.post(`/residents/${resident._id}/reset-password`, { password: password.trim() });
+      toast.success(`Password reset for ${resident.fullName}. They must change it on the next sign-in.`);
+      setPassword('Resident@123');
+    } catch (err) {
+      setResetError(err);
+    } finally {
+      setResetting(false);
+    }
+  }
 
   return (
     <Modal title={resident.fullName} onClose={onClose} wide>
@@ -303,6 +322,19 @@ function ResidentDetail({
         </Card>
 
         <div className="stack">
+          {canEdit ? (
+            <Card title="Sign-in password" subtitle="If they forgot it, set a temporary one. They must change it next time they sign in.">
+              {resetError ? <ErrorAlert error={resetError} /> : null}
+              <form onSubmit={resetPassword}>
+                <Field label="Temporary password" hint="The usual first password is Resident@123. At least 8 characters, with a letter and a number.">
+                  <Input value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" />
+                </Field>
+                <Button size="sm" variant="primary" type="submit" busy={resetting} disabled={password.trim().length < 8}>
+                  Reset password
+                </Button>
+              </form>
+            </Card>
+          ) : null}
           <Card title="Family members" subtitle={family.loading ? 'Loading…' : `${family.page.total} added`}>
             {family.loading ? (
               <Loading />
@@ -405,7 +437,7 @@ function CreateResidentForm({
           <Input value={fullName} onChange={(e) => setFullName(e.target.value)} placeholder="Ravi Kumar" required autoFocus />
         </Field>
         <div className="form-row">
-          <Field label="Mobile number" required hint="Used for OTP sign-in.">
+          <Field label="Mobile number" required hint="They sign in with this mobile or email. First password is Resident@123 and must be changed.">
             <Input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+919876543210" required />
           </Field>
           <Field label="Email">
@@ -495,7 +527,7 @@ function EditResidentForm({
           <Input value={fullName} onChange={(e) => setFullName(e.target.value)} required autoFocus />
         </Field>
         <div className="form-row">
-          <Field label="Mobile number" required hint="Used for OTP sign-in.">
+          <Field label="Mobile number" required hint="They sign in with this mobile or email. First password is Resident@123.">
             <Input value={phone} onChange={(e) => setPhone(e.target.value)} required />
           </Field>
           <Field label="Email">

@@ -6,7 +6,7 @@
  */
 
 import React from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { NavigationContainer, DefaultTheme } from '@react-navigation/native';
 import { navigationRef, SignedInChrome } from './src/components/chrome.tsx';
@@ -19,6 +19,7 @@ import { colors } from './src/components/ui.tsx';
 import { type RootStackParamList, type TabParamList } from './src/nav.ts';
 
 import { LoginScreen } from './src/screens/LoginScreen.tsx';
+import { ChangePasswordScreen } from './src/screens/ChangePasswordScreen.tsx';
 import { HomeScreen } from './src/screens/HomeScreen.tsx';
 import { ComplaintsScreen } from './src/screens/ComplaintsScreen.tsx';
 import { ComplaintDetailScreen } from './src/screens/ComplaintDetailScreen.tsx';
@@ -41,32 +42,18 @@ const navTheme = {
   colors: { ...DefaultTheme.colors, background: colors.bg, primary: colors.brand },
 };
 
-function TabIcon({ glyph, focused }: { glyph: string; focused: boolean }) {
-  return (
-    <View style={{ opacity: focused ? 1 : 0.45 }}>
-      <View style={[styles.tabIconBox, focused && styles.tabIconBoxActive]}>
-        <Text style={styles.tabGlyph}>{glyph}</Text>
-      </View>
-    </View>
-  );
-}
-
 function MainTabs() {
   return (
     <Tab.Navigator
-      screenOptions={{
-        headerShown: false,
-        tabBarStyle: { display: 'none', height: 0 },
-        tabBarActiveTintColor: colors.brandDark,
-        tabBarInactiveTintColor: colors.textFaint,
-      }}
+      tabBar={() => null}
+      screenOptions={{ headerShown: false }}
     >
-      <Tab.Screen name="Home" component={HomeScreen} options={{ tabBarLabel: 'Home', tabBarIcon: ({ focused }) => <TabIcon glyph="⌂" focused={focused} /> }} />
-      <Tab.Screen name="Complaints" component={ComplaintsScreen} options={{ tabBarLabel: 'Complaints', tabBarIcon: ({ focused }) => <TabIcon glyph="🛠" focused={focused} /> }} />
-      <Tab.Screen name="Bills" component={BillsScreen} options={{ tabBarLabel: 'Bills', tabBarIcon: ({ focused }) => <TabIcon glyph="₹" focused={focused} /> }} />
-      <Tab.Screen name="Amenities" component={AmenitiesScreen} options={{ tabBarLabel: 'Amenities', tabBarIcon: ({ focused }) => <TabIcon glyph="🏸" focused={focused} /> }} />
-      <Tab.Screen name="Visitors" component={VisitorsScreen} options={{ tabBarLabel: 'Visitors', tabBarIcon: ({ focused }) => <TabIcon glyph="🎟" focused={focused} /> }} />
-      <Tab.Screen name="Profile" component={ProfileScreen} options={{ tabBarLabel: 'Profile', tabBarIcon: ({ focused }) => <TabIcon glyph="👤" focused={focused} /> }} />
+      <Tab.Screen name="Home" component={HomeScreen} />
+      <Tab.Screen name="Complaints" component={ComplaintsScreen} />
+      <Tab.Screen name="Bills" component={BillsScreen} />
+      <Tab.Screen name="Amenities" component={AmenitiesScreen} />
+      <Tab.Screen name="Visitors" component={VisitorsScreen} />
+      <Tab.Screen name="Profile" component={ProfileScreen} />
     </Tab.Navigator>
   );
 }
@@ -88,6 +75,10 @@ function Root() {
         <Stack.Screen name="Login" component={LoginScreen} />
       </Stack.Navigator>
     );
+  }
+
+  if (who.user.mustChangePassword) {
+    return <ChangePasswordScreen />;
   }
 
   return (
@@ -121,7 +112,4 @@ export default function App() {
 
 const styles = StyleSheet.create({
   boot: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.bg },
-  tabIconBox: { width: 26, height: 26, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
-  tabIconBoxActive: { backgroundColor: colors.brandSoft },
-  tabGlyph: { fontSize: 14 },
 });
