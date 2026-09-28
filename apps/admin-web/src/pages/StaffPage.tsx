@@ -24,13 +24,27 @@ import { useSession } from '../lib/session.tsx';
 import type { Gate, Staff } from '../lib/types.ts';
 import { Avatar } from './ResidentsPage.tsx';
 
-/** The employment types the staff schema accepts. */
+/** Values the staff API actually accepts. The old form sent hours (FULL_TIME) as employmentType. */
 const STAFF_TYPES = [
-  'SECURITY', 'HOUSEKEEPING', 'MAINTENANCE', 'ELECTRICAL', 'PLUMBING', 'GARDENING',
-  'CLEANING', 'TECHNICIAN', 'RECEPTIONIST', 'MANAGER', 'DRIVER', 'OTHER',
-];
-const SHIFTS = ['MORNING', 'AFTERNOON', 'NIGHT', 'GENERAL', 'ROTATING'];
-const STATUSES = ['ACTIVE', 'ON_LEAVE', 'RESIGNED', 'TERMINATED', 'SUSPENDED', 'INACTIVE'];
+  'SECURITY', 'HOUSEKEEPING', 'MAINTENANCE', 'ELECTRICIAN', 'PLUMBER', 'GARDENER',
+  'CLEANER', 'TECHNICIAN', 'RECEPTIONIST', 'MANAGER', 'DRIVER', 'MAID', 'COOK', 'BABYSITTER', 'OTHER',
+] as const;
+const SHIFTS = ['MORNING', 'AFTERNOON', 'NIGHT', 'GENERAL'] as const;
+const STATUSES = ['ACTIVE', 'INACTIVE', 'SUSPENDED', 'TERMINATED'] as const;
+const EMPLOYMENT = [
+  ['SOCIETY', 'Society employee'],
+  ['CONTRACT', 'Contract'],
+  ['VENDOR', 'Vendor'],
+  ['PRIVATE', 'Private (works for a flat)'],
+] as const;
+const WORK_TYPES = [
+  ['FULL_TIME', 'Full time'],
+  ['PART_TIME', 'Part time'],
+  ['HOURLY', 'Hourly'],
+  ['DAILY', 'Daily'],
+  ['VISITING', 'Visiting'],
+] as const;
+const ID_PROOFS = ['AADHAAR', 'PAN', 'VOTER_ID', 'PASSPORT', 'DRIVING_LICENSE', 'OTHER'] as const;
 
 /** Roles the login endpoint can mint — mirrored from the backend so the picker never over-promises. */
 const STAFF_ROLES = [
@@ -269,10 +283,10 @@ function StaffDetail({
       () =>
         api.patch(`/staff/${member._id}`, {
           monthlySalary: form.monthlySalary.trim() ? Number(form.monthlySalary) : undefined,
-          shift: form.shift,
+          shift: SHIFTS.includes(form.shift as (typeof SHIFTS)[number]) ? form.shift : 'GENERAL',
           gateId: form.gateId || null,
-          type: form.type,
-          status: form.status,
+          type: STAFF_TYPES.includes(form.type as (typeof STAFF_TYPES)[number]) ? form.type : 'OTHER',
+          status: STATUSES.includes(form.status as (typeof STATUSES)[number]) ? form.status : 'ACTIVE',
         }),
       'Staff record updated',
     );
@@ -382,7 +396,7 @@ function StaffDetail({
               items={[
                 ['Status', <Pill key="s" tone={statusTone(member.status)}>{label(member.status)}</Pill>],
                 ['Role', label(member.type)],
-                ['Employment', label(member.employmentType ?? 'FULL_TIME')],
+                ['Employed by', EMPLOYMENT.find((e) => e[0] === member.employmentType)?.[1] ?? label(member.employmentType ?? 'SOCIETY')],
                 ['Work type', label(member.workType ?? '—')],
                 ['Shift', label(member.shift ?? 'GENERAL')],
                 ['Hours', member.startTime && member.endTime ? `${member.startTime}–${member.endTime}` : '—'],
@@ -550,7 +564,8 @@ function CreateStaffForm({
   const [gateId, setGateId] = useState('');
   const [joiningDate, setJoiningDate] = useState('');
   const [monthlySalary, setSalary] = useState('');
-  const [employmentType, setEmploymentType] = useState('FULL_TIME');
+  const [employmentType, setEmploymentType] = useState<(typeof EMPLOYMENT)[number][0]>('SOCIETY');
+  const [workType, setWorkType] = useState<(typeof WORK_TYPES)[number][0]>('FULL_TIME');
   const [idProofType, setIdProofType] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -570,6 +585,7 @@ function CreateStaffForm({
         joiningDate: joiningDate || undefined,
         monthlySalary: monthlySalary.trim() ? Number(monthlySalary) : undefined,
         employmentType,
+        workType,
         idProofType: idProofType || undefined,
       });
       onDone();
@@ -613,17 +629,26 @@ function CreateStaffForm({
               ))}
             </Select>
           </Field>
-          <Field label="Employment">
-            <Select value={employmentType} onChange={(e) => setEmploymentType(e.target.value)}>
-              {['FULL_TIME', 'PART_TIME', 'CONTRACT', 'HOURLY', 'AGENCY'].map((t) => (
-                <option key={t} value={t}>
-                  {label(t)}
+          <Field label="Employed by" hint="A guard is a society employee.">
+            <Select value={employmentType} onChange={(e) => setEmploymentType(e.target.value as (typeof EMPLOYMENT)[number][0])}>
+              {EMPLOYMENT.map(([value, text]) => (
+                <option key={value} value={value}>
+                  {text}
                 </option>
               ))}
             </Select>
           </Field>
         </div>
         <div className="form-row">
+          <Field label="Hours">
+            <Select value={workType} onChange={(e) => setWorkType(e.target.value as (typeof WORK_TYPES)[number][0])}>
+              {WORK_TYPES.map(([value, text]) => (
+                <option key={value} value={value}>
+                  {text}
+                </option>
+              ))}
+            </Select>
+          </Field>
           <Field label="Shift">
             <Select value={shift} onChange={(e) => setShift(e.target.value)}>
               {SHIFTS.map((s) => (
@@ -633,17 +658,17 @@ function CreateStaffForm({
               ))}
             </Select>
           </Field>
-          <Field label="Assigned gate">
-            <Select value={gateId} onChange={(e) => setGateId(e.target.value)}>
-              <option value="">No fixed gate</option>
-              {gates.map((g) => (
-                <option key={g._id} value={g._id}>
-                  {g.name}
-                </option>
-              ))}
-            </Select>
-          </Field>
         </div>
+        <Field label="Assigned gate">
+          <Select value={gateId} onChange={(e) => setGateId(e.target.value)}>
+            <option value="">No fixed gate</option>
+            {gates.map((g) => (
+              <option key={g._id} value={g._id}>
+                {g.name}
+              </option>
+            ))}
+          </Select>
+        </Field>
         <div className="form-row">
           <Field label="Joining date">
             <Input type="date" value={joiningDate} onChange={(e) => setJoiningDate(e.target.value)} />
@@ -659,7 +684,7 @@ function CreateStaffForm({
           <Field label="ID proof type">
             <Select value={idProofType} onChange={(e) => setIdProofType(e.target.value)}>
               <option value="">Not recorded</option>
-              {['AADHAAR', 'PAN', 'VOTER_ID', 'PASSPORT', 'DRIVING_LICENCE'].map((t) => (
+              {ID_PROOFS.map((t) => (
                 <option key={t} value={t}>
                   {label(t)}
                 </option>
