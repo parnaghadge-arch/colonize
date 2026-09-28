@@ -116,6 +116,14 @@ export function ScanScreen(_props: Props) {
     <Screen>
       <ScreenTitle title="Gate scan" subtitle={gateId ? `Gate ${gateId.slice(-6)} · ${who?.society?.name ?? ''}` : who?.society?.name} />
 
+      {!gateId ? (
+        <Card style={{ marginBottom: 12, borderColor: colors.warning + '88' }}>
+          <Text style={{ fontSize: 13.5, color: colors.text, lineHeight: 19 }}>
+            You have not started your shift at a gate yet. Go to Shift and pick your gate — then every scan will be recorded at that gate.
+          </Text>
+        </Card>
+      ) : null}
+
       <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12 }}>
         <Pressable style={[styles.actionTab, action === 'CHECK_IN' && styles.actionTabActive]} onPress={() => setAction('CHECK_IN')}>
           <Text style={[styles.actionTabLabel, action === 'CHECK_IN' && { color: '#fff' }]}>Entry</Text>

@@ -156,6 +156,13 @@ export function QueueScreen({ navigation }: Props) {
   return (
     <Screen>
       <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.brand} />
+      {!gateId ? (
+        <Card style={{ marginBottom: 12, borderColor: colors.warning + '88' }}>
+          <Text style={{ fontSize: 13.5, color: colors.text, lineHeight: 19 }}>
+            No gate selected. Go to Shift and start your shift at a gate — manual check-in needs a gate.
+          </Text>
+        </Card>
+      ) : null}
       {queue ? (
         <View style={{ flexDirection: 'row', gap: 8, marginBottom: 14 }}>
           <Stat label="Awaiting" value={queue.counts?.awaiting ?? 0} tone={queue.counts?.awaiting ? 'warning' : 'default'} />

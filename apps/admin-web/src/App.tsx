@@ -8,6 +8,7 @@ import { StructurePage } from './pages/StructurePage.tsx';
 import { ResidentsPage } from './pages/ResidentsPage.tsx';
 import { VisitorsPage } from './pages/VisitorsPage.tsx';
 import { GateConsolePage } from './pages/GateConsolePage.tsx';
+import { GatesPage } from './pages/GatesPage.tsx';
 import { ComplaintsPage } from './pages/ComplaintsPage.tsx';
 import { WorkOrdersPage } from './pages/WorkOrdersPage.tsx';
 import { VendorsPage } from './pages/VendorsPage.tsx';
@@ -52,6 +53,7 @@ export function App() {
         <Route path="/structure" element={<StructurePage />} />
         <Route path="/residents" element={<ResidentsPage />} />
         <Route path="/visitors" element={<VisitorsPage />} />
+        <Route path="/gates" element={<GatesPage />} />
         <Route path="/gate" element={<GateConsolePage />} />
         <Route path="/complaints" element={<ComplaintsPage />} />
         <Route path="/work-orders" element={<WorkOrdersPage />} />

@@ -321,6 +321,30 @@ export async function seedTenantBasics(db: TenantDatabase, society: SeedTenantIn
   }));
   if (ledgersToCreate.length > 0) await ledgers.insertMany(ledgersToCreate, { skipUniqueCheck: true });
 
+  /* ---- default gate — without at least one gate the guard app cannot record entries ---- */
+  const gates = db.collection('gates');
+  const gateCount = await gates.countDocuments({ societyId });
+  if (gateCount === 0) {
+    await gates.create({
+      _id: `gate_main`,
+      societyId,
+      name: 'Main Gate',
+      code: 'MAIN',
+      type: 'MAIN',
+      allowsVehicles: true,
+      allowsPedestrians: true,
+      isOpen24x7: true,
+      openTime: null,
+      closeTime: null,
+      location: null,
+      isActive: true,
+      entriesToday: 0,
+      lastEntryAt: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+
   /* ---- subscription mirror (module gating without a cross-database read) ---- */
   await syncSubscriptionMirror(db, {
     societyId,

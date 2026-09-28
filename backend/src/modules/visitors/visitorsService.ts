@@ -130,7 +130,7 @@ async function resolveGateWithFallback(
   }
 
   if (opts.requireGate) {
-    throw ApiError.badRequest('A gate is required to record an entry');
+    throw ApiError.badRequest('A gate is required to record an entry. Please start your shift at a gate first, then scan again.');
   }
 
   return { gateId: null, gate: null };
