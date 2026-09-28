@@ -66,7 +66,45 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       const savedGate = await tokenStore.gateId();
       setGateId(savedGate);
       setBootstrapped(true);
-      await loadWhoami();
+      const me = await loadWhoami();
+      if (cancelled) return;
+      // Validate the persisted gateId — a stale id from another society or a deleted gate
+      // causes every manual check-in to fail with "Gate not found". If the backend says we
+      // are not posted at that gate any more, drop it so the guard is forced to start a
+      // fresh shift instead of seeing a cryptic 404 on every tap.
+      if (savedGate && me) {
+        try {
+          const current = await api.get<{ onDuty: boolean; gate?: { id: string } | null }>('/guards/shift/current');
+          if (!current.onDuty) {
+            // No open shift — the stored gate is from a previous shift, clear it.
+            await tokenStore.setGate(null);
+            if (!cancelled) setGateId(null);
+          } else if (current.gate?.id && current.gate.id !== savedGate) {
+            // Shift is open at a different gate — sync local storage to the server truth.
+            await tokenStore.setGate(current.gate.id);
+            if (!cancelled) setGateId(current.gate.id);
+          }
+        } catch {
+          // If the current-shift check fails, try /gates/my as a secondary validation.
+          try {
+            const mine = await api.get<{ gate: { id: string } | null }>('/gates/my');
+            if (!mine.gate) {
+              await tokenStore.setGate(null);
+              if (!cancelled) setGateId(null);
+            } else if (mine.gate.id !== savedGate) {
+              await tokenStore.setGate(mine.gate.id);
+              if (!cancelled) setGateId(mine.gate.id);
+            }
+          } catch (innerErr) {
+            const innerMsg = innerErr instanceof Error ? innerErr.message : '';
+            if (/gate not found/i.test(innerMsg)) {
+              await tokenStore.setGate(null);
+              if (!cancelled) setGateId(null);
+            }
+            // Otherwise best-effort: keep the saved gate if we cannot validate (offline).
+          }
+        }
+      }
     })();
     const off = onUnauthorized(() => {
       setWho(null);

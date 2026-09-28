@@ -530,7 +530,14 @@ gateConsoleRouter.post(
   asyncHandler(async (req, res) => {
     const c = requireTenantContext(req);
     const body = req.body as z.infer<typeof scanQrSchema>;
-    const gateId = body.gateId ?? c.membership.gateIds?.[0] ?? null;
+    let gateId: string | null = (body.gateId as string | undefined) ?? c.membership.gateIds?.[0] ?? null;
+    if (!gateId) {
+      const shift = await c.db.collection('guard_shift_logs').findOne(
+        { societyId: c.society.id, userId: c.principal.userId, logoutAt: null },
+        { sort: { loginAt: -1 } },
+      );
+      if (shift?.gateId) gateId = String(shift.gateId);
+    }
     const svc = { ...ctxFrom(req), gateId };
 
     if (body.action === 'VALIDATE') {
@@ -582,7 +589,14 @@ gateConsoleRouter.get(
   authenticate({ clientScopes: ['security', 'console'] }),
   asyncHandler(async (req, res) => {
     const c = requireTenantContext(req);
-    const gateId = req.query.gateId ? String(req.query.gateId) : c.membership.gateIds?.[0] ?? null;
+    let gateId: string | null = req.query.gateId ? String(req.query.gateId) : c.membership.gateIds?.[0] ?? null;
+    if (!gateId) {
+      const shift = await c.db.collection('guard_shift_logs').findOne(
+        { societyId: c.society.id, userId: c.principal.userId, logoutAt: null },
+        { sort: { loginAt: -1 } },
+      );
+      if (shift?.gateId) gateId = String(shift.gateId);
+    }
     const queue = await visitorsService.gateQueue(ctxFrom(req), { gateId });
     return ok(res, queue, 'Gate queue fetched');
   }),

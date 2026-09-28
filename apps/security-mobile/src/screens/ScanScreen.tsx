@@ -52,15 +52,26 @@ export function ScanScreen(_props: Props) {
       }
       setBusy(true);
       scanningRef.current = true;
+      const attemptScan = async (gid: string | null) =>
+        api.envelope.post<ScanResult>('/gate/scan', {
+          token: clean,
+          ...(gid ? { gateId: gid } : {}),
+          action,
+        });
       try {
         // CHECK_IN / CHECK_OUT answer with `{ visitor, entry, … }` and the server's message
         // ("Ravi checked in at Main Gate"). A rejected pass is an HTTP 4xx and lands in
         // the catch below, so a 200 with an entry row is the acceptance.
-        const envelope = await api.envelope.post<ScanResult>('/gate/scan', {
-          token: clean,
-          gateId: gateId ?? undefined,
-          action,
-        });
+        let envelope;
+        try {
+          envelope = await attemptScan(gateId ?? null);
+        } catch (err) {
+          if (err instanceof ApiError && /gate not found/i.test(err.message) && gateId) {
+            envelope = await attemptScan(null);
+          } else {
+            throw err;
+          }
+        }
         const result = envelope.data;
         const accepted = Boolean(result.entry ?? result.visitor);
         const entity = (result.entity ?? result.visitor ?? null) as { visitorName?: string; name?: string } | null;

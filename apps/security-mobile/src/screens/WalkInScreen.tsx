@@ -74,21 +74,36 @@ export function WalkInScreen({ navigation }: Props) {
   const submit = async () => {
     setBusy(true);
     setError(null);
+    const basePayload = {
+      visitorName: name.trim(),
+      unitId: unit!._id,
+      purpose: purpose.trim(),
+      visitorType,
+      numberOfVisitors: Math.max(1, Number(people) || 1),
+      ...(phone.trim() ? { visitorPhone: phone.trim() } : {}),
+      ...(vehicle.trim() ? { vehicleNumber: vehicle.trim().toUpperCase() } : {}),
+      ...(notes.trim() ? { notes: notes.trim() } : {}),
+    };
     try {
       await api.post('/visitors/at-gate', {
-        visitorName: name.trim(),
-        unitId: unit!._id,
-        purpose: purpose.trim(),
-        visitorType,
-        numberOfVisitors: Math.max(1, Number(people) || 1),
-        ...(phone.trim() ? { visitorPhone: phone.trim() } : {}),
-        ...(vehicle.trim() ? { vehicleNumber: vehicle.trim().toUpperCase() } : {}),
-        ...(notes.trim() ? { notes: notes.trim() } : {}),
+        ...basePayload,
         ...(gateId ? { gateId } : {}),
       });
       navigation.goBack();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not register the visitor.');
+      const msg = err instanceof Error ? err.message : 'Could not register the visitor.';
+      if (/gate not found/i.test(msg) && gateId) {
+        try {
+          await api.post('/visitors/at-gate', basePayload);
+          navigation.goBack();
+          return;
+        } catch (retryErr) {
+          setError(retryErr instanceof Error ? retryErr.message : msg);
+          setBusy(false);
+          return;
+        }
+      }
+      setError(msg);
       setBusy(false);
     }
   };

@@ -12,7 +12,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { Alert, Button, Card, EmptyState, Loading, Screen, Stat, StatusChip, colors } from '../components/ui.tsx';
-import { api } from '../lib/api.ts';
+import { api, tokenStore } from '../lib/api.ts';
 import { durationSince, formatTime, friendlyStatus } from '../lib/format.ts';
 import { useSession } from '../lib/session.tsx';
 import type { GateQueue, QueueVisitor } from '../lib/types.ts';
@@ -21,7 +21,7 @@ import type { ConsoleTabScreenProps } from '../nav.ts';
 type Props = ConsoleTabScreenProps<'Queue'>;
 
 export function QueueScreen({ navigation }: Props) {
-  const { gateId } = useSession();
+  const { gateId, endShift } = useSession();
   const [queue, setQueue] = useState<GateQueue | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -72,12 +72,39 @@ export function QueueScreen({ navigation }: Props) {
     setBusyId(v.id);
     setError(null);
     setNotice(null);
+    const attempt = async (gid: string | null) => api.post(`/visitors/${v.id}/check-in`, { ...(gid ? { gateId: gid } : {}) });
     try {
-      await api.post(`/visitors/${v.id}/check-in`, { ...(gateId ? { gateId } : {}) });
+      await attempt(gateId);
       setNotice(`${v.visitorName} checked in.`);
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Check-in failed.');
+      const msg = err instanceof Error ? err.message : 'Check-in failed.';
+      // Stale gateId in local storage — backend now falls back to open shift, but if it still
+      // says Gate not found, clear the local posting so the guard is forced to restart shift.
+      if (/gate not found/i.test(msg)) {
+        try {
+          await attempt(null);
+          setNotice(`${v.visitorName} checked in.`);
+          await load();
+          return;
+        } catch (retryErr) {
+          const retryMsg = retryErr instanceof Error ? retryErr.message : msg;
+          if (/gate not found/i.test(retryMsg)) {
+            await tokenStore.setGate(null);
+            try {
+              await endShift();
+            } catch {
+              // ignore
+            }
+            setError('Your gate posting is stale — please start your shift again at your current gate.');
+            navigation.navigate('Shift');
+            return;
+          }
+          setError(retryMsg);
+        }
+      } else {
+        setError(msg);
+      }
     } finally {
       setBusyId(null);
     }
@@ -87,14 +114,40 @@ export function QueueScreen({ navigation }: Props) {
     setBusyId(v.id);
     setError(null);
     setNotice(null);
-    try {
-      const result = await api.post<{ durationMinutes?: number }>(`/visitors/${v.id}/check-out`, {
-        ...(gateId ? { gateId } : {}),
+    const attempt = async (gid: string | null) =>
+      api.post<{ durationMinutes?: number }>(`/visitors/${v.id}/check-out`, {
+        ...(gid ? { gateId: gid } : {}),
       });
+    try {
+      const result = await attempt(gateId);
       setNotice(`${v.visitorName} checked out${typeof result.durationMinutes === 'number' ? ` after ${result.durationMinutes} min` : ''}.`);
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Check-out failed.');
+      const msg = err instanceof Error ? err.message : 'Check-out failed.';
+      if (/gate not found/i.test(msg)) {
+        try {
+          const result = await attempt(null);
+          setNotice(`${v.visitorName} checked out${typeof result.durationMinutes === 'number' ? ` after ${result.durationMinutes} min` : ''}.`);
+          await load();
+          return;
+        } catch (retryErr) {
+          const retryMsg = retryErr instanceof Error ? retryErr.message : msg;
+          if (/gate not found/i.test(retryMsg)) {
+            await tokenStore.setGate(null);
+            try {
+              await endShift();
+            } catch {
+              // ignore
+            }
+            setError('Your gate posting is stale — please start your shift again at your current gate.');
+            navigation.navigate('Shift');
+            return;
+          }
+          setError(retryMsg);
+        }
+      } else {
+        setError(msg);
+      }
     } finally {
       setBusyId(null);
     }

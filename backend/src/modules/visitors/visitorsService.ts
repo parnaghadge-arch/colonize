@@ -82,6 +82,60 @@ async function appendTimeline(
   );
 }
 
+/**
+ * Resolve a gate id that actually exists in this society.
+ * Guards often have a stale gateId in local storage (previous society, deleted gate, or a
+ * posting that was cleared). Instead of failing with a bare "Gate not found", try the
+ * caller's current posting and their open shift log before giving up.
+ */
+async function resolveGateWithFallback(
+  ctx: VisitorsContext,
+  inputGateId: string | null | undefined,
+  opts: { requireGate: boolean },
+): Promise<{ gateId: string | null; gate: Document | null }> {
+  const tried = new Set<string>();
+  const candidates: string[] = [];
+  const push = (id: unknown) => {
+    const v = id ? String(id).trim() : '';
+    if (!v || tried.has(v)) return;
+    tried.add(v);
+    candidates.push(v);
+  };
+
+  push(inputGateId);
+  push(ctx.gateId);
+
+  // Open shift is the most reliable source when membership.gateIds is empty (staff without userId linkage).
+  if (candidates.length === 0 || opts.requireGate) {
+    try {
+      const shift = await ctx.db.collection('guard_shift_logs').findOne(
+        { societyId: ctx.societyId, userId: ctx.actorId, logoutAt: null },
+        { sort: { loginAt: -1 } },
+      );
+      if (shift?.gateId) push(shift.gateId);
+    } catch {
+      // Best-effort: a missing collection or driver quirk should not block the fallback chain.
+    }
+  }
+
+  for (const gid of candidates) {
+    const gate = await ctx.db.collection('gates').findOne({ societyId: ctx.societyId, _id: gid });
+    if (gate) return { gateId: gid, gate };
+  }
+
+  if (candidates.length > 0) {
+    // The client sent a gate that does not exist in this society (stale storage, deleted gate).
+    // Keep the 404 code so the app can prompt a shift restart, but explain what to do.
+    throw new ApiError('Gate not found. Your gate posting may be stale — please end your shift and start again at your current gate.', 'NOT_FOUND');
+  }
+
+  if (opts.requireGate) {
+    throw ApiError.badRequest('A gate is required to record an entry');
+  }
+
+  return { gateId: null, gate: null };
+}
+
 /** "Is it night right now, in the society's own timezone?" — never the server's. */
 export function isNightTime(now: Date, timezone: string, nightStart: string, nightEnd: string): boolean {
   const fmt = new Intl.DateTimeFormat('en-GB', { timeZone: timezone, hour: '2-digit', minute: '2-digit', hour12: false });
@@ -243,11 +297,7 @@ export async function createAtGateVisitor(ctx: VisitorsContext, input: AtGateInp
   const unit = await resolveUnitForGate(ctx, input);
   await assertDailyLimit(ctx, String(unit._id), settings);
 
-  const gateId = input.gateId ? String(input.gateId) : ctx.gateId ?? null;
-  if (gateId) {
-    const gate = await ctx.db.collection('gates').findOne({ societyId: ctx.societyId, _id: gateId });
-    if (!gate) throw ApiError.notFound('Gate');
-  }
+  const { gateId } = await resolveGateWithFallback(ctx, input.gateId ?? null, { requireGate: false });
 
   // Offline sync: the same capture uploaded twice must not create two visitors (§50).
   if (input.clientRequestId) {
@@ -463,11 +513,8 @@ export interface CheckInInput {
  */
 export async function checkInVisitor(ctx: VisitorsContext, input: CheckInInput): Promise<Document> {
   const settings = await visitorSettings(ctx);
-  const gateId = input.gateId ? String(input.gateId) : ctx.gateId ?? null;
-  if (!gateId) throw ApiError.badRequest('A gate is required to record an entry');
-
-  const gate = await ctx.db.collection('gates').findOne({ societyId: ctx.societyId, _id: gateId });
-  if (!gate) throw ApiError.notFound('Gate');
+  const { gateId, gate } = await resolveGateWithFallback(ctx, input.gateId ?? null, { requireGate: true });
+  if (!gateId || !gate) throw ApiError.badRequest('A gate is required to record an entry');
   if (!gate.isActive) throw ApiError.badRequest(`${gate.name} is not active`);
 
   const now = new Date();
@@ -632,10 +679,8 @@ export interface CheckOutInput {
 }
 
 export async function checkOutVisitor(ctx: VisitorsContext, input: CheckOutInput): Promise<Document> {
-  const gateId = input.gateId ? String(input.gateId) : ctx.gateId ?? null;
-  if (!gateId) throw ApiError.badRequest('A gate is required to record an exit');
-  const gate = await ctx.db.collection('gates').findOne({ societyId: ctx.societyId, _id: gateId });
-  if (!gate) throw ApiError.notFound('Gate');
+  const { gateId, gate } = await resolveGateWithFallback(ctx, input.gateId ?? null, { requireGate: true });
+  if (!gateId || !gate) throw ApiError.badRequest('A gate is required to record an exit');
 
   let visitor: Document | null = null;
   if (input.token) {
